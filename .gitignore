@@ -1,0 +1,12 @@
+# Documentation and outputs
+doc/
+outputs/
+
+# Node modules
+backend/node_modules/
+
+# Claude settings
+.claude/
+
+# Environment files
+.env

@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Podcast Script Generator</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="header-content">
+                <div>
+                    <h1>🎙️ Podcast Script Generator</h1>
+                    <p>拖拽 Excel 文件生成播客脚本</p>
+                </div>
+                <button id="settingsBtn" class="btn-icon" title="设置">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M16.5002 12C16.5002 14.4853 14.4855 16.5 12.0002 16.5C9.51497 16.5 7.50025 14.4853 7.50025 12C7.50025 9.51472 9.51497 7.5 12.0002 7.5C14.4855 7.5 16.5002 9.51472 16.5002 12ZM15.0002 12C15.0002 10.3431 13.6571 9 12.0002 9C10.3434 9 9.00025 10.3431 9.00025 12C9.00025 13.6569 10.3434 15 12.0002 15C13.6571 15 15.0002 13.6569 15.0002 12Z" fill="currentColor"/>
+                        <path d="M12.0002 1.875L21.0935 6.9375V17.0625L12.0002 22.125L2.90698 17.0625V6.9375L12.0002 1.875ZM4.40698 7.8192V16.1808L12.0002 20.4082L19.5935 16.1808V7.8192L12.0002 3.59179L4.40698 7.8192Z" fill="currentColor"/>
+                    </svg>
+                </button>
+            </div>
+        </header>
+
+        <!-- 设置面板（模态框） -->
+        <div id="settingsModal" class="modal hidden">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>⚙️ 设置</h2>
+                    <button id="closeSettingsBtn" class="btn-close">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <!-- Workflow 选择 -->
+                    <div class="setting-group">
+                        <label for="workflowSelect">选择 Workflow</label>
+                        <select id="workflowSelect" class="setting-select">
+                            <option value="">加载中...</option>
+                        </select>
+                        <p class="setting-hint">选择要使用的 Dify Workflow</p>
+                    </div>
+
+                    <!-- 自定义下载路径 -->
+                    <div class="setting-group">
+                        <label>输出路径设置</label>
+                        <div class="path-option">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="useDefaultPath" checked>
+                                <span>使用默认路径 (outputs/YYYY/MM/DD/)</span>
+                            </label>
+                        </div>
+                        <div id="customPathGroup" class="custom-path-group hidden">
+                            <input type="text" id="customPathInput" class="setting-input"
+                                   placeholder="例如: D:\MyPodcasts">
+                            <p class="setting-hint">
+                                ⚠️ <strong>注意</strong>：由于浏览器安全限制，请手动输入<strong>服务器上</strong>的绝对路径。
+                                <br>此设置仅在本地运行服务器时有效。
+                            </p>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button id="saveSettingsBtn" class="btn-primary">保存设置</button>
+                </div>
+            </div>
+        </div>
+
+        <main>
+            <!-- 文件上传区域 -->
+            <section class="upload-section">
+                <div id="dropZone" class="drop-zone">
+                    <div class="drop-zone-content">
+                        <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"></path>
+                        </svg>
+                        <p class="drop-zone-text">拖拽 Excel 文件到这里</p>
+                        <p class="drop-zone-hint">或点击选择文件</p>
+                        <input type="file" id="fileInput" accept=".xlsx" hidden>
+                    </div>
+                    <div id="fileInfo" class="file-info hidden">
+                        <p class="file-name"></p>
+                        <p class="file-size"></p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 进度显示区域 -->
+            <section id="progressSection" class="progress-section hidden">
+                <div class="progress-header">
+                    <h2>执行进度</h2>
+                    <div class="progress-controls">
+                        <span id="progressPercent" class="progress-percent">0%</span>
+                        <button id="cancelBtn" class="btn-cancel">取消</button>
+                    </div>
+                </div>
+
+                <div class="progress-bar-container">
+                    <div id="progressBar" class="progress-bar"></div>
+                </div>
+
+                <p id="progressMessage" class="progress-message">准备中...</p>
+
+                <!-- 日志显示区域 -->
+                <div class="logs-container">
+                    <div class="logs-header">
+                        <span>📋 执行日志</span>
+                        <button id="clearLogsBtn" class="btn-small">清空</button>
+                    </div>
+                    <div id="logsContent" class="logs-content"></div>
+                </div>
+            </section>
+
+            <!-- 结果区域 -->
+            <section id="resultSection" class="result-section hidden">
+                <div class="result-header">
+                    <h2>✅ 执行完成</h2>
+                </div>
+
+                <div class="result-info">
+                    <p id="resultFileRow"><strong>结果文件:</strong> <span id="resultFilename"></span></p>
+                    <p><strong>耗时:</strong> <span id="elapsedTime"></span> 秒</p>
+                    <p><strong>使用 Tokens:</strong> <span id="totalTokens"></span></p>
+                </div>
+
+                <div class="result-actions">
+                    <button id="downloadBtn" class="btn-primary">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"></path>
+                        </svg>
+                        下载结果
+                    </button>
+                    <button id="resetBtn" class="btn-secondary">重新上传</button>
+                </div>
+            </section>
+
+            <!-- 错误区域 -->
+            <section id="errorSection" class="error-section hidden">
+                <div class="error-header">
+                    <h2>❌ 执行失败</h2>
+                </div>
+                <p id="errorMessage" class="error-message"></p>
+                <button id="retryBtn" class="btn-primary">重试</button>
+            </section>
+        </main>
+
+        <footer>
+            <p>Powered by Dify Workflow | <a href="/api/health" target="_blank">系统状态</a></p>
+        </footer>
+    </div>
+
+    <!-- Toast 提示框 -->
+    <div id="toast" class="toast hidden"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>
