@@ -22,6 +22,7 @@ const settingsBtn = document.getElementById('settingsBtn');
 const settingsModal = document.getElementById('settingsModal');
 const closeSettingsBtn = document.getElementById('closeSettingsBtn');
 const workflowSelect = document.getElementById('workflowSelect');
+const channelSelect = document.getElementById('channelSelect');
 const useDefaultPath = document.getElementById('useDefaultPath');
 const customPathGroup = document.getElementById('customPathGroup');
 const customPathInput = document.getElementById('customPathInput');
@@ -282,6 +283,7 @@ async function executeWorkflow() {
     const formData = new FormData();
     formData.append('file', selectedFile);
     formData.append('workflow', currentWorkflow); // 添加 workflow 参数
+    formData.append('channelId', channelSelect.value); // 添加频道ID参数
 
     try {
         // 发起请求 (SSE)
@@ -388,13 +390,113 @@ function handleProgress(data) {
         progressMessage.textContent = message;
         addLog(message, 'info');
     }
+
+    // 特殊状态处理
+    if (status === 'parsing_excel') {
+        addLog('📊 正在解析Excel文件内容...', 'info');
+    } else if (status === 'validating_data') {
+        addLog('✅ 正在验证数据完整性...', 'info');
+    } else if (status === 'uploading_to_supabase') {
+        addLog('🗄️ 正在上传到Supabase数据库...', 'info');
+    } else if (status === 'supabase_uploaded') {
+        if (data.supabase_results) {
+            const { success, failed, skipped } = data.supabase_results;
+
+            // 根据不同情况显示不同的提示信息
+            if (skipped > 0 && success === 0 && failed === 0) {
+                // 所有数据都被跳过的情况
+                addLog(`ℹ️ 所有数据均已存在于数据库中，无需重复上传（跳过 ${skipped} 条）`, 'info');
+            } else if (success > 0 && failed === 0) {
+                // 全部成功的情况
+                addLog(`🎉 Supabase数据库上传完成！成功: ${success} 条, 失败: ${failed} 条`, 'success');
+            } else if (failed > 0) {
+                // 有失败的情况
+                addLog(`⚠️ Supabase数据库上传完成！成功: ${success} 条, 失败: ${failed} 条`, 'warning');
+            } else {
+                // 其他情况
+                addLog(`📊 Supabase数据库上传完成！成功: ${success} 条, 失败: ${failed} 条`, 'info');
+            }
+        }
+    } else if (status === 'getting_channel_config') {
+        addLog('⚙️ 正在获取频道配置...', 'info');
+    } else if (status === 'tts_started') {
+        addLog('🎙️ 开始生成播客音频...', 'info');
+    } else if (status === 'tts_generating') {
+        addLog(`🔊 ${message}`, 'info');
+    } else if (status === 'tts_completed') {
+        addLog('✅ 音频生成完成!', 'success');
+    } else if (status === 'audio_uploading') {
+        addLog(`📤 ${message}`, 'info');
+    } else if (status === 'db_updating') {
+        addLog(`💾 ${message}`, 'info');
+    } else if (status === 'audio_upload_completed') {
+        addLog('🎉 音频上传和数据库更新完成!', 'success');
+        if (data.upload_results) {
+            const uploadStats = data.upload_results;
+            addLog(`📊 上传统计: 成功 ${uploadStats.success || 0} 个, 失败 ${uploadStats.failed || 0} 个`, 'success');
+        }
+    }
 }
 
 // 处理成功
 function handleSuccess(data) {
-    const { result_file, elapsed_time, total_tokens, no_download } = data;
+    const { result_file, elapsed_time, total_tokens, no_download, supabase_results } = data;
 
     resultFilename = result_file;
+
+    // 如果有Supabase结果，显示相关信息
+    if (supabase_results) {
+        const { success, failed, errors, skipped } = supabase_results;
+
+        // 根据不同情况显示不同的提示信息
+        if (skipped > 0 && success === 0 && failed === 0) {
+            // 所有数据都被跳过的情况
+            addLog(`ℹ️ 数据库状态: 跳过 ${skipped} 条记录（已存在）`, 'info');
+
+            // 在结果区域显示数据库状态
+            const supabaseResultRow = document.getElementById('supabaseResultRow');
+            const supabaseResult = document.getElementById('supabaseResult');
+            if (supabaseResultRow && supabaseResult) {
+                supabaseResultRow.style.display = 'block';
+                supabaseResult.textContent = `跳过 ${skipped} 条记录（数据已存在）`;
+                supabaseResult.style.color = '#666';
+            }
+        } else if (success > 0 && failed === 0) {
+            // 全部成功的情况
+            addLog(`📊 Supabase数据库: 成功 ${success} 条, 失败 ${failed} 条`, 'success');
+
+            // 在结果区域显示数据库状态
+            const supabaseResultRow = document.getElementById('supabaseResultRow');
+            const supabaseResult = document.getElementById('supabaseResult');
+            if (supabaseResultRow && supabaseResult) {
+                supabaseResultRow.style.display = 'block';
+                supabaseResult.textContent = `成功上传 ${success} 条记录`;
+                supabaseResult.style.color = '#28a745';
+            }
+        } else if (failed > 0) {
+            // 有失败的情况
+            addLog(`📊 Supabase数据库: 成功 ${success} 条, 失败 ${failed} 条`, 'warning');
+
+            // 在结果区域显示数据库状态
+            const supabaseResultRow = document.getElementById('supabaseResultRow');
+            const supabaseResult = document.getElementById('supabaseResult');
+            if (supabaseResultRow && supabaseResult) {
+                supabaseResultRow.style.display = 'block';
+                supabaseResult.textContent = `成功 ${success} 条, 失败 ${failed} 条`;
+                supabaseResult.style.color = '#dc3545';
+            }
+        } else {
+            // 其他情况
+            addLog(`📊 Supabase数据库: 成功 ${success} 条, 失败 ${failed} 条`, 'info');
+        }
+
+        if (errors && errors.length > 0) {
+            addLog(`⚠️ 数据库上传错误: ${errors.length} 条记录`, 'warning');
+            errors.forEach(error => {
+                addLog(`  - 第${error.row}行 (${error.title}): ${error.error}`, 'warning');
+            });
+        }
+    }
 
     // 更新进度
     updateProgress(100);

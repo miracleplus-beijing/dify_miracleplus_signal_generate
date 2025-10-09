@@ -31,6 +31,17 @@
                     <button id="closeSettingsBtn" class="btn-close">&times;</button>
                 </div>
                 <div class="modal-body">
+                    <!-- 频道选择 -->
+                    <div class="setting-group">
+                        <label for="channelSelect">选择播客频道</label>
+                        <select id="channelSelect" class="setting-select">
+                            <option value="355ed9b9-58d6-4716-a542-cadc13ae8ef4">论文前沿日报</option>
+                            <option value="216c4396-cf27-425b-be09-e8565cf98dd2">大厂动态一览</option>
+                            <option value="3f1c022b-222a-420a-9126-f96c63144ddc">经典论文解读</option>
+                        </select>
+                        <p class="setting-hint">选择要上传到的播客频道</p>
+                    </div>
+
                     <!-- Workflow 选择 -->
                     <div class="setting-group">
                         <label for="workflowSelect">选择 Workflow</label>
@@ -118,6 +129,7 @@
 
                 <div class="result-info">
                     <p id="resultFileRow"><strong>结果文件:</strong> <span id="resultFilename"></span></p>
+                    <p id="supabaseResultRow" style="display: none;"><strong>数据库状态:</strong> <span id="supabaseResult"></span></p>
                     <p><strong>耗时:</strong> <span id="elapsedTime"></span> 秒</p>
                     <p><strong>使用 Tokens:</strong> <span id="totalTokens"></span></p>
                 </div>

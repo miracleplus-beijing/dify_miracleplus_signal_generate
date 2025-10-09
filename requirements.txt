@@ -1,0 +1,10 @@
+# Python Dependencies for Podcast Generator
+# Python版本要求: >=3.8
+
+# OpenAI SDK (用于 SiliconFlow TTS API 调用)
+openai>=2.0.0
+
+# HTTP 请求库
+requests>=2.32.0
+
+
