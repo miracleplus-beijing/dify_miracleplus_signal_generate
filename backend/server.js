@@ -10,9 +10,202 @@ const DifyClient = require('./difyClient');
 const Logger = require('./logger');
 const SupabaseClient = require('./supabaseClient');
 const ExcelParser = require('./excelParser');
+const ArxivEnricher = require('./arxivEnricher');
 
 const app = express();
 const projectRoot = path.join(__dirname, '..');
+
+/**
+ * 处理批量arXiv链接（批量模式）
+ */
+async function processBatchArxiv(arxivLinks, difyClient, logger, sendEvent) {
+    try {
+        const arxivUrls = arxivLinks.map(link => link.arxiv_url);
+
+        logger.info(`[Batch] 开始批量处理: ${arxivUrls.length} 个链接`);
+        sendEvent('progress', {
+            status: 'dify_batch_start',
+            message: `正在批量调用Dify处理 ${arxivUrls.length} 个论文...`,
+            progress: 20
+        });
+
+        const response = await difyClient.runWorkflowBatch(arxivUrls);
+
+        // 解析批量响应
+        let buffer = '';
+        const results = [];
+
+        return new Promise((resolve, reject) => {
+            response.data.on('data', (chunk) => {
+                buffer += chunk.toString();
+
+                const events = buffer.split('\n\n');
+                buffer = events.pop();
+
+                for (const eventStr of events) {
+                    if (!eventStr.trim()) continue;
+
+                    try {
+                        const lines = eventStr.split('\n');
+                        let eventData = '';
+
+                        for (const line of lines) {
+                            if (line.startsWith('data: ')) {
+                                eventData = line.substring(6).trim();
+                            }
+                        }
+
+                        if (eventData) {
+                            const data = JSON.parse(eventData);
+
+                            // 处理节点进度
+                            if (data.event === 'node_started') {
+                                sendEvent('progress', {
+                                    status: 'dify_processing',
+                                    message: `Dify正在处理: ${data.data?.title || ''}`,
+                                    progress: 30
+                                });
+                            }
+
+                            // 提取最终结果
+                            if (data.event === 'workflow_finished' && data.data?.status === 'succeeded') {
+                                const outputs = data.data.outputs || {};
+
+                                // 获取Dify返回的结果数组
+                                const batchResults = outputs[config.DIFY_BATCH_OUTPUT_VARIABLE] || outputs.results || outputs.podcasts || [];
+
+                                if (Array.isArray(batchResults)) {
+                                    logger.info(`[Batch] 收到 ${batchResults.length} 个结果`);
+
+                                    batchResults.forEach((item, idx) => {
+                                        const arxivId = item.arxiv_id || arxivLinks[idx]?.arxiv_id || '';
+                                        results.push({
+                                            success: true,
+                                            arxiv_id: arxivId,
+                                            arxiv_url: arxivLinks[idx]?.arxiv_url || '',
+                                            podcast_title: item.podcast_title || '',
+                                            podcast_script: item.podcast_script || '',
+                                            metadata: arxivLinks[idx]?.metadata || {},
+                                            error: null
+                                        });
+                                    });
+                                } else {
+                                    logger.error('[Batch] Dify返回格式不是数组');
+                                    reject(new Error('Dify返回格式错误'));
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        logger.error(`[Batch] 解析响应失败: ${e.message}`);
+                    }
+                }
+            });
+
+            response.data.on('end', () => {
+                if (results.length > 0) {
+                    logger.info(`[Batch] ✓ 批量处理完成: ${results.length} 个结果`);
+                    resolve(results);
+                } else {
+                    reject(new Error('批量处理未返回有效结果'));
+                }
+            });
+
+            response.data.on('error', (error) => {
+                reject(error);
+            });
+        });
+
+    } catch (error) {
+        logger.error(`[Batch] 批量处理失败: ${error.message}`);
+        throw error;
+    }
+}
+
+/**
+ * 处理单个arXiv链接（串行模式）
+ */
+async function processSingleArxiv(arxivUrl, arxivId, metadata, difyClient, logger) {
+    try {
+        logger.info(`[Single] 开始处理: ${arxivId}`);
+
+        const response = await difyClient.runWorkflowSingle(arxivUrl);
+
+        // 解析单个响应
+        let buffer = '';
+        let finalResult = null;
+
+        return new Promise((resolve, reject) => {
+            response.data.on('data', (chunk) => {
+                buffer += chunk.toString();
+
+                const events = buffer.split('\n\n');
+                buffer = events.pop();
+
+                for (const eventStr of events) {
+                    if (!eventStr.trim()) continue;
+
+                    try {
+                        const lines = eventStr.split('\n');
+                        let eventData = '';
+
+                        for (const line of lines) {
+                            if (line.startsWith('data: ')) {
+                                eventData = line.substring(6).trim();
+                            }
+                        }
+
+                        if (eventData) {
+                            const data = JSON.parse(eventData);
+
+                            if (data.event === 'workflow_finished' && data.data?.status === 'succeeded') {
+                                const outputs = data.data.outputs || {};
+                                finalResult = {
+                                    podcast_title: outputs.podcast_title || '',
+                                    podcast_script: outputs.podcast_script || ''
+                                };
+                            }
+                        }
+                    } catch (e) {
+                        logger.error(`[Single] 解析响应失败: ${e.message}`);
+                    }
+                }
+            });
+
+            response.data.on('end', () => {
+                if (finalResult) {
+                    logger.info(`[Single] ✓ 完成: ${arxivId}`);
+                    resolve({
+                        success: true,
+                        arxiv_id: arxivId,
+                        arxiv_url: arxivUrl,
+                        podcast_title: finalResult.podcast_title,
+                        podcast_script: finalResult.podcast_script,
+                        metadata: metadata,
+                        error: null
+                    });
+                } else {
+                    reject(new Error(`未获取到有效结果: ${arxivId}`));
+                }
+            });
+
+            response.data.on('error', (error) => {
+                reject(error);
+            });
+        });
+
+    } catch (error) {
+        logger.error(`[Single] ✗ 失败: ${arxivId} - ${error.message}`);
+        return {
+            success: false,
+            arxiv_id: arxivId,
+            arxiv_url: arxivUrl,
+            podcast_title: '',
+            podcast_script: '',
+            metadata: metadata,
+            error: error.message
+        };
+    }
+}
 
 /**
  * 上传音频文件到Supabase Storage并更新数据库
@@ -383,6 +576,9 @@ app.post('/api/execute', upload.single('file'), async (req, res) => {
     let workflowRunId = null;
     let excelData = null;
     let supabaseResults = null;
+    let enrichedData = null;
+    let validationResults = null;
+    let arxivLinks = [];
 
     try {
         // 设置 SSE 响应头
@@ -449,7 +645,7 @@ app.post('/api/execute', upload.single('file'), async (req, res) => {
                 sendEvent('progress', {
                     status: 'parsing_excel',
                     message: '正在解析Excel文件...',
-                    progress: 15
+                    progress: 5
                 });
 
                 // 解析Excel文件
@@ -459,14 +655,35 @@ app.post('/api/execute', upload.single('file'), async (req, res) => {
                     throw new Error('Excel文件中没有有效数据');
                 }
 
+                // 🆕 补全arXiv数据
                 sendEvent('progress', {
-                    status: 'validating_data',
-                    message: `正在验证数据 (${excelData.length} 条记录)...`,
-                    progress: 20
+                    status: 'enriching_data',
+                    message: '正在从arXiv补全论文数据...',
+                    progress: 10
                 });
 
-                // 验证数据
-                const validationResults = excelParser.validateData(excelData, logger);
+                const arxivEnricher = new ArxivEnricher(logger, {
+                    enabled: process.env.ARXIV_ENRICH_ENABLED !== 'false',
+                    apiDelayMs: parseInt(process.env.ARXIV_API_DELAY_MS || '1000'),
+                    maxRetries: parseInt(process.env.ARXIV_MAX_RETRIES || '3'),
+                    timeoutMs: parseInt(process.env.ARXIV_TIMEOUT_MS || '30000')
+                });
+
+                enrichedData = await arxivEnricher.enrichData(excelData, sendEvent);
+
+                // 记录补全统计
+                const enrichStats = arxivEnricher.getStats();
+                logger.info(`arXiv数据补全统计: ${JSON.stringify(enrichStats)}`);
+
+                sendEvent('progress', {
+                    status: 'validating_data',
+                    message: `正在验证数据 (${enrichedData.length} 条记录)...`,
+                    progress: 20,
+                    enrich_stats: enrichStats
+                });
+
+                // 验证数据（使用补全后的数据）
+                validationResults = excelParser.validateData(enrichedData, logger);
 
                 if (validationResults.valid.length === 0) {
                     throw new Error('Excel数据验证失败：没有有效的数据行');
@@ -475,18 +692,23 @@ app.post('/api/execute', upload.single('file'), async (req, res) => {
                 sendEvent('progress', {
                     status: 'uploading_to_supabase',
                     message: '正在上传到Supabase数据库...',
+                    progress: 25,
+                    enrich_stats: enrichStats
+                });
+
+                // 📝 提取arXiv链接列表（新增）
+                sendEvent('progress', {
+                    status: 'extracting_arxiv',
+                    message: '正在提取arXiv链接...',
                     progress: 25
                 });
 
-                // 上传到Supabase
-                supabaseResults = await supabaseClient.processExcelData(validationResults.valid, fileName, channelId, logger);
+                arxivLinks = excelParser.extractArxivLinks(enrichedData);
+                logger.info(`提取到 ${arxivLinks.length} 个arXiv链接`);
 
-                sendEvent('progress', {
-                    status: 'supabase_uploaded',
-                    message: `Supabase上传完成: 成功 ${supabaseResults.success} 条, 失败 ${supabaseResults.failed} 条`,
-                    progress: 30,
-                    supabase_results: supabaseResults
-                });
+                if (arxivLinks.length === 0) {
+                    throw new Error('未找到有效的arXiv链接');
+                }
 
             } catch (excelError) {
                 logger.error(`Excel处理失败: ${excelError.message}`);
@@ -499,272 +721,172 @@ app.post('/api/execute', upload.single('file'), async (req, res) => {
             }
         }
 
+        // 🚀 调用Dify处理arXiv链接（新流程）
+        const difyClient = new DifyClient(logger, workflowType);
+        let podcastResults = [];
+
+        if (config.DIFY_BATCH_MODE === 'batch') {
+            // ========== 批量模式 ==========
+            sendEvent('progress', {
+                status: 'dify_batch_processing',
+                message: `使用批量模式处理 ${arxivLinks.length} 个论文...`,
+                progress: 30
+            });
+
+            podcastResults = await processBatchArxiv(arxivLinks, difyClient, logger, sendEvent);
+
+        } else {
+            // ========== 串行模式 ==========
+            sendEvent('progress', {
+                status: 'dify_sequential_processing',
+                message: `使用串行模式处理 ${arxivLinks.length} 个论文...`,
+                progress: 30
+            });
+
+            for (let i = 0; i < arxivLinks.length; i++) {
+                const link = arxivLinks[i];
+                const progressPercent = 30 + Math.floor((i / arxivLinks.length) * 25); // 30-55%
+
+                sendEvent('progress', {
+                    status: 'processing_arxiv',
+                    message: `正在处理 [${i + 1}/${arxivLinks.length}]: ${link.arxiv_id}`,
+                    progress: progressPercent
+                });
+
+                const result = await processSingleArxiv(
+                    link.arxiv_url,
+                    link.arxiv_id,
+                    link.metadata,
+                    difyClient,
+                    logger
+                );
+
+                podcastResults.push(result);
+            }
+        }
+
+        // 统计处理结果
+        const successCount = podcastResults.filter(r => r.success).length;
+        const failedCount = podcastResults.filter(r => !r.success).length;
+
+        logger.info(`Dify处理完成: 成功 ${successCount}, 失败 ${failedCount}`);
+
+        if (successCount === 0) {
+            throw new Error('所有论文处理失败');
+        }
+
+        // 💾 保存播客脚本为JSON
         sendEvent('progress', {
-            status: 'uploading',
-            message: '正在上传文件到Dify...',
-            progress: 35
+            status: 'saving_scripts',
+            message: '正在保存播客脚本...',
+            progress: 55
         });
 
-        // 2. 上传到 Dify
-        const difyClient = new DifyClient(logger, workflowType);
-        const uploadFileId = await difyClient.uploadFile(tempFilePath, fileName);
+        const formattedResults = podcastResults
+            .filter(r => r.success)
+            .map(r => ({
+                title: r.podcast_title,
+                script: r.podcast_script,
+                arxiv_id: r.arxiv_id
+            }));
 
-        if (!uploadFileId) {
-            sendEvent('error', { message: '文件上传到 Dify 失败' });
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const resultFilename = `论文播客稿-${timestamp}.json`;
+        const resultPath = path.join(config.getOutputDir(), resultFilename);
+
+        fs.writeFileSync(resultPath, JSON.stringify(formattedResults, null, 2), 'utf8');
+        logger.info(`播客脚本已保存: ${resultPath}`);
+
+        // 保存映射文件
+        const arxivMapping = {};
+        const titleMapping = {};
+
+        podcastResults.forEach((result, idx) => {
+            if (result.success) {
+                arxivMapping[`paper_${idx}`] = result.arxiv_id;
+                titleMapping[result.arxiv_id] = result.podcast_title;
+            }
+        });
+
+        const mappingPath = path.join(config.getOutputDir(), 'arxiv_mapping.json');
+        fs.writeFileSync(mappingPath, JSON.stringify(arxivMapping, null, 2), 'utf8');
+
+        const titleMappingPath = path.join(config.getOutputDir(), 'podcast_titles.json');
+        fs.writeFileSync(titleMappingPath, JSON.stringify(titleMapping, null, 2), 'utf8');
+
+        // 🎙️ 生成音频（调用现有TTS模块）
+        sendEvent('progress', {
+            status: 'tts_start',
+            message: '开始生成音频...',
+            progress: 60
+        });
+
+        let audioFiles = [];
+        let uploadResults = null;
+
+        try {
+            const ttsResult = await runPodcastTTS(resultPath, channelId, logger, sendEvent);
+            audioFiles = Array.isArray(ttsResult?.audioFiles) ? ttsResult.audioFiles : [];
+            uploadResults = ttsResult?.uploadResults || null;
+        } catch (ttsError) {
+            logger.error(`音频生成失败: ${ttsError.message}`);
+            sendEvent('error', {
+                status: 'tts_failed',
+                message: `音频生成失败: ${ttsError.message}`
+            });
             res.end();
             return;
         }
 
+        // 🗄️ 【最后一步】上传完整数据到Supabase
         sendEvent('progress', {
-            status: 'running',
-            message: '文件上传到Dify成功，开始执行 workflow...',
-            progress: 40,
-            upload_file_id: uploadFileId
+            status: 'uploading_to_supabase',
+            message: '正在上传完整数据到数据库...',
+            progress: 95
         });
 
-        // 3. 执行 workflow (流式)
-        const response = await difyClient.runWorkflowStreaming(uploadFileId, 'documents');
+        // 构造音频URL映射
+        const audioUrlMap = {};
+        if (uploadResults && uploadResults.urls) {
+            uploadResults.urls.forEach(item => {
+                audioUrlMap[item.arxiv_id] = item.url;
+            });
+        }
 
-        let buffer = '';
+        // 上传到Supabase（包含audio_url）
+        supabaseResults = await supabaseClient.processExcelData(
+            validationResults.valid,
+            fileName,
+            channelId,
+            logger,
+            audioUrlMap,  // 音频URL映射
+            titleMapping  // 播客标题映射
+        );
 
-        response.data.on('data', async (chunk) => {
-            buffer += chunk.toString();
-
-            // 处理完整的事件
-            const events = buffer.split('\n\n');
-            buffer = events.pop(); // 保留不完整的事件
-
-            for (const eventStr of events) {
-                if (!eventStr.trim()) continue;
-
-                try {
-                    const lines = eventStr.split('\n');
-                    let eventType = 'message';
-                    let eventData = '';
-
-                    for (const line of lines) {
-                        if (line.startsWith('event: ')) {
-                            eventType = line.substring(7).trim();
-                        } else if (line.startsWith('data: ')) {
-                            eventData = line.substring(6).trim();
-                        }
-                    }
-
-                    if (!eventData) continue;
-
-                    const data = JSON.parse(eventData);
-
-                    // 处理不同的事件类型
-                    if (data.event === 'workflow_started') {
-                        workflowRunId = data.workflow_run_id;
-                        logger.info(`Workflow 开始执行, run_id: ${workflowRunId}`);
-                        sendEvent('progress', {
-                            status: 'running',
-                            message: 'Workflow 开始执行',
-                            progress: 40,
-                            workflow_run_id: workflowRunId
-                        });
-
-                    } else if (data.event === 'node_started') {
-                        const nodeTitle = data.data?.title || '未知节点';
-                        logger.info(`节点开始: ${nodeTitle}`);
-                        sendEvent('progress', {
-                            status: 'running',
-                            message: `正在执行: ${nodeTitle}`,
-                            progress: 50
-                        });
-
-                    } else if (data.event === 'node_finished') {
-                        const nodeTitle = data.data?.title || '未知节点';
-                        logger.info(`节点完成: ${nodeTitle}`);
-                        sendEvent('progress', {
-                            status: 'running',
-                            message: `完成: ${nodeTitle}`,
-                            progress: 60
-                        });
-
-                    } else if (data.event === 'workflow_finished') {
-                        const status = data.data?.status;
-                        const elapsedTime = data.data?.elapsed_time || 0;
-                        const totalTokens = data.data?.total_tokens || 0;
-
-                        if (status === 'succeeded') {
-                            logger.info(`Workflow 执行成功! 耗时: ${elapsedTime.toFixed(2)}秒, Tokens: ${totalTokens}`);
-
-                            // 4. 根据 workflow 类型决定是否下载文件
-                            if (workflowConfig.needsDownload) {
-                                // 需要下载文件
-                                const files = data.data?.outputs?.files;
-                                if (!files || files.length === 0) {
-                                    logger.error('未找到输出文件');
-                                    sendEvent('error', { message: '未找到输出文件' });
-                                    res.end();
-                                    return;
-                                }
-
-                                const fileInfo = files[0];
-                                const fileUrl = fileInfo.url;
-                                const fileName = fileInfo.filename;
-
-                                logger.info(`开始下载文件: ${fileName}`);
-                                logger.info(`文件 URL: ${fileUrl}`);
-
-                                try {
-                                    // 下载文件
-                                    const axios = require('axios');
-                                    const fileResponse = await axios.get(fileUrl, {
-                                        timeout: 60000,
-                                        responseType: 'text',  // 强制以文本格式接收
-                                        transformResponse: [(data) => data]  // 禁用自动 JSON 解析
-                                    });
-
-                                    // 确保内容是字符串
-                                    let fileContent = fileResponse.data;
-                                    if (Array.isArray(fileContent)) {
-                                        fileContent = fileContent.join('');
-                                    } else if (typeof fileContent !== 'string') {
-                                        fileContent = String(fileContent);
-                                    }
-
-                                    // 🔧 改进：保持JSON格式，只转换单引号为双引号
-                                    let podcastTitles = {}; // 保存标题映射
-                                    let finalFileName = fileName;
-
-                                    try {
-                                        // 将Python字典格式转为标准JSON（单引号→双引号）
-                                        const jsonStr = fileContent.replace(/'/g, '"');
-                                        const parsed = JSON.parse(jsonStr);
-
-                                        if (Array.isArray(parsed)) {
-                                            logger.info(`检测到JSON数组格式，包含 ${parsed.length} 个播客段落`);
-
-                                            // 提取标题映射（用于后续更新数据库）
-                                            parsed.forEach((item, index) => {
-                                                if (typeof item === 'object' && item.title) {
-                                                    if (excelData && excelData[index] && excelData[index].ID) {
-                                                        podcastTitles[excelData[index].ID] = item.title;
-                                                        logger.info(`映射标题: ${excelData[index].ID} -> ${item.title.substring(0, 50)}...`);
-                                                    }
-                                                }
-                                            });
-
-                                            // ✅ 保持JSON格式，转换为标准JSON字符串
-                                            fileContent = JSON.stringify(parsed, null, 2);
-
-                                            // 使用.json扩展名
-                                            finalFileName = fileName.replace('.md', '.json');
-                                            logger.info(`✓ 保持JSON数组格式（${parsed.length} 个播客段落），使用文件名: ${finalFileName}`);
-                                        }
-                                    } catch (e) {
-                                        logger.info('使用原始文本格式（非JSON数组）');
-                                    }
-
-                                    // 保存文件
-                                    const resultPath = path.join(config.getOutputDir(), finalFileName);
-                                    fs.writeFileSync(resultPath, fileContent, 'utf8');
-                                    logger.info(`结果保存至: ${resultPath}`);
-
-                                    // 保存arXiv ID映射文件（如果有Excel数据）
-                                    if (excelData && excelData.length > 0) {
-                                        const arxivMappingPath = path.join(config.getOutputDir(), 'arxiv_mapping.json');
-                                        const arxivMapping = {};
-
-                                        excelData.forEach((row, index) => {
-                                            if (row.ID) {
-                                                // 使用索引作为key，因为我们不知道Dify如何组织输出
-                                                arxivMapping[`paper_${index}`] = row.ID;
-                                                // 也添加标题作为key（去除特殊字符）
-                                                if (row.Title) {
-                                                    const cleanTitle = row.Title.replace(/[^\w\s\u4e00-\u9fa5]/g, '_').substring(0, 50);
-                                                    arxivMapping[cleanTitle] = row.ID;
-                                                }
-                                            }
-                                        });
-
-                                        fs.writeFileSync(arxivMappingPath, JSON.stringify(arxivMapping, null, 2), 'utf8');
-                                        logger.info(`arXiv ID映射文件已保存: ${arxivMappingPath}`);
-
-                                        // 🔧 新增：保存播客标题映射文件
-                                        if (Object.keys(podcastTitles).length > 0) {
-                                            const podcastTitleMappingPath = path.join(config.getOutputDir(), 'podcast_titles.json');
-                                            fs.writeFileSync(podcastTitleMappingPath, JSON.stringify(podcastTitles, null, 2), 'utf8');
-                                            logger.info(`播客标题映射已保存: ${podcastTitleMappingPath} (${Object.keys(podcastTitles).length} 条记录)`);
-                                        }
-                                    }
-
-                                    let audioFiles = [];
-                                    let uploadResults = null;
-                                    try {
-                                        const ttsResult = await runPodcastTTS(resultPath, channelId, logger, sendEvent);
-                                        audioFiles = Array.isArray(ttsResult?.audioFiles) ? ttsResult.audioFiles : [];
-                                        uploadResults = ttsResult?.uploadResults || null;
-                                    } catch (ttsError) {
-                                        logger.error(`音频生成失败: ${ttsError.message}`);
-                                        sendEvent('error', {
-                                            status: 'tts_failed',
-                                            message: `音频生成失败: ${ttsError.message}`,
-                                            result_file: fileName
-                                        });
-                                        res.end();
-                                        return;
-                                    }
-                                    sendEvent('success', {
-                                        status: 'succeeded',
-                                        message: '执行成功!',
-                                        progress: 100,
-                                        result_file: fileName,
-                                        elapsed_time: elapsedTime,
-                                        total_tokens: totalTokens,
-                                        supabase_results: supabaseResults, // 添加Supabase结果
-                                        audio_files: audioFiles,
-                                        upload_results: uploadResults // 添加上传结果
-                                    });
-
-                                } catch (downloadError) {
-                                    logger.error(`文件下载失败: ${downloadError.message}`);
-                                    sendEvent('error', { message: `文件下载失败: ${downloadError.message}` });
-                                    res.end();
-                                    return;
-                                }
-                            } else {
-                                // 不需要下载文件（如 CHEESE_DAILY）
-                                logger.info('Workflow 执行完成，无需下载文件');
-                                sendEvent('success', {
-                                    status: 'succeeded',
-                                    message: '执行成功!',
-                                    progress: 100,
-                                    elapsed_time: elapsedTime,
-                                    total_tokens: totalTokens,
-                                    no_download: true,
-                                    supabase_results: supabaseResults, // 添加Supabase结果
-                                });
-                            }
-
-                        } else {
-                            const error = data.data?.error || '未知错误';
-                            logger.error(`Workflow 执行失败: ${error}`);
-                            sendEvent('error', {
-                                status: 'failed',
-                                message: `执行失败: ${error}`
-                            });
-                        }
-                    }
-
-                } catch (e) {
-                    console.error('解析事件失败:', e);
-                }
-            }
+        sendEvent('progress', {
+            status: 'supabase_uploaded',
+            message: `数据库上传完成: 成功 ${supabaseResults.success} 条`,
+            progress: 98,
+            supabase_results: supabaseResults
         });
 
-        response.data.on('end', () => {
-            res.end();
+        // ✅ 返回成功结果
+        sendEvent('success', {
+            status: 'succeeded',
+            message: '执行成功!',
+            progress: 100,
+            result_file: resultFilename,
+            processing_stats: {
+                total: arxivLinks.length,
+                success: successCount,
+                failed: failedCount
+            },
+            supabase_results: supabaseResults,
+            audio_files: audioFiles,
+            upload_results: uploadResults
         });
 
-        response.data.on('error', (error) => {
-            logger.error(`流式响应错误: ${error.message}`);
-            sendEvent('error', { message: error.message });
-            res.end();
-        });
+        res.end();
 
     } catch (error) {
         logger.error(`系统异常: ${error.message}`);

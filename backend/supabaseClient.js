@@ -32,9 +32,11 @@ class SupabaseClient {
      * @param {string} fileName - 原始文件名
      * @param {string} channelId - 选择的频道ID
      * @param {Object} logger - 日志记录器
+     * @param {Object} audioUrlMap - 音频URL映射 {arxiv_id: audio_url}（可选）
+     * @param {Object} titleMap - 播客标题映射 {arxiv_id: podcast_title}（可选）
      * @returns {Promise<Object>} 上传结果
      */
-    async processExcelData(excelData, fileName, channelId, logger) {
+    async processExcelData(excelData, fileName, channelId, logger, audioUrlMap = {}, titleMap = {}) {
         try {
             logger.info('开始处理Excel数据并上传到Supabase...');
             logger.info(`Excel数据包含 ${excelData.length} 条记录`);
@@ -94,11 +96,12 @@ class SupabaseClient {
 
                     // 准备播客数据
                     logger.info(`准备播客数据: ${row.Title}`);
-                    const podcastData = this.preparePodcastData(row, channelData);
+                    const podcastData = this.preparePodcastData(row, channelData, audioUrlMap, titleMap);
                     logger.info(`播客数据准备完成: ${JSON.stringify({
                         title: podcastData.title,
                         arxiv_id: podcastData.arxiv_id,
-                        authors_count: podcastData.authors?.length || 0
+                        authors_count: podcastData.authors?.length || 0,
+                        has_audio: !!podcastData.audio_url
                     }, null, 2)}`);
 
                     // 插入播客数据
@@ -165,7 +168,7 @@ class SupabaseClient {
      * @param {Object} channelData - 频道数据对象
      * @returns {Object} 播客数据对象
      */
-    preparePodcastData(row, channelData) {
+    preparePodcastData(row, channelData, audioUrlMap = {}, titleMap = {}) {
         // 解析作者信息
         const authors = this.parseAuthors(row.Authors, row.Matched_Authors);
 
@@ -182,20 +185,23 @@ class SupabaseClient {
             }
         }
 
+        // 获取arXiv ID
+        const arxivId = row.ID || '';
+
         // 准备数据，确保所有必填字段都有值
         const podcastData = {
-            title: row.Title || '无标题',
+            title: titleMap[arxivId] || row.Title || '无标题', // 优先使用播客标题
             description: row.Abstract || '暂无描述',
             channel_id: channelData.id,
             cover_url: channelData.cover_url,
-            audio_url: '', // Excel数据中没有音频文件，设置为空字符串
+            audio_url: audioUrlMap[arxivId] || '', // 使用音频URL映射
             paper_url: row.Abstract_URL || '',
             project_url: row.Project_URL || '',
             paper_title: row.Title || '无标题',
             authors: authors,
             institution: row.research_entities || '',
             publish_date: publishDate,
-            arxiv_id: row.ID || '',
+            arxiv_id: arxivId,
             primary_category: row.Primary_Category || '',
             all_categories: row.All_Categories || '',
             status: 'published',

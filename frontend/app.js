@@ -394,10 +394,41 @@ function handleProgress(data) {
     // 特殊状态处理
     if (status === 'parsing_excel') {
         addLog('📊 正在解析Excel文件内容...', 'info');
+    } else if (status === 'enriching_data') {
+        addLog('🔍 正在从arXiv补全论文数据...', 'info');
     } else if (status === 'validating_data') {
         addLog('✅ 正在验证数据完整性...', 'info');
+        // 显示arXiv补全统计
+        if (data.enrich_stats) {
+            const { enriched, skipped, failed, total } = data.enrich_stats;
+            if (total > 0) {
+                if (enriched > 0) {
+                    addLog(`📝 arXiv数据补全: 成功 ${enriched} 条, 跳过 ${skipped} 条, 失败 ${failed} 条`, 'success');
+                } else if (skipped === total) {
+                    addLog(`ℹ️ 所有数据已完整，无需补全（共 ${total} 条）`, 'info');
+                } else if (failed > 0) {
+                    addLog(`⚠️ arXiv数据补全: 失败 ${failed} 条, 跳过 ${skipped} 条`, 'warning');
+                }
+            }
+        }
+    } else if (status === 'extracting_arxiv') {
+        addLog('🔗 正在提取arXiv链接...', 'info');
+    } else if (status === 'dify_batch_processing') {
+        addLog('📦 使用批量模式调用Dify...', 'info');
+    } else if (status === 'dify_sequential_processing') {
+        addLog('📝 使用串行模式调用Dify...', 'info');
+    } else if (status === 'dify_batch_start') {
+        addLog(`🚀 ${message}`, 'info');
+    } else if (status === 'processing_arxiv') {
+        addLog(`📄 ${message}`, 'info');
+    } else if (status === 'dify_processing') {
+        addLog(`🤖 ${message}`, 'info');
+    } else if (status === 'saving_scripts') {
+        addLog('💾 正在保存播客脚本...', 'info');
+    } else if (status === 'tts_start') {
+        addLog('🎙️ 开始生成音频...', 'info');
     } else if (status === 'uploading_to_supabase') {
-        addLog('🗄️ 正在上传到Supabase数据库...', 'info');
+        addLog('🗄️ 正在上传完整数据到数据库...', 'info');
     } else if (status === 'supabase_uploaded') {
         if (data.supabase_results) {
             const { success, failed, skipped } = data.supabase_results;
@@ -440,9 +471,19 @@ function handleProgress(data) {
 
 // 处理成功
 function handleSuccess(data) {
-    const { result_file, elapsed_time, total_tokens, no_download, supabase_results } = data;
+    const { result_file, processing_stats, supabase_results } = data;
 
     resultFilename = result_file;
+
+    // 显示处理统计
+    if (processing_stats) {
+        const { total, success, failed } = processing_stats;
+        if (failed > 0) {
+            addLog(`⚠️ 处理统计: 总计 ${total} 篇, 成功 ${success} 篇, 失败 ${failed} 篇`, 'warning');
+        } else {
+            addLog(`✅ 处理统计: 总计 ${total} 篇, 全部成功`, 'success');
+        }
+    }
 
     // 如果有Supabase结果，显示相关信息
     if (supabase_results) {

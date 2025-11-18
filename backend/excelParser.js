@@ -280,6 +280,52 @@ class ExcelParser {
             logger.error(`导出报告失败: ${error.message}`);
         }
     }
+
+    /**
+     * 从Excel数据中提取arXiv链接和元数据
+     * @param {Array} data - Excel数据数组
+     * @returns {Array} [{arxiv_id, arxiv_url, row_number, metadata}, ...]
+     */
+    extractArxivLinks(data) {
+        const links = [];
+
+        data.forEach((item, index) => {
+            const arxivId = item.ID?.trim() || '';
+
+            if (!arxivId) {
+                return; // 跳过没有ID的行
+            }
+
+            // 构造arXiv URL
+            let arxivUrl = '';
+            if (arxivId.startsWith('http')) {
+                // 已经是完整URL
+                arxivUrl = arxivId;
+            } else {
+                // 构造标准arXiv URL
+                arxivUrl = `https://arxiv.org/abs/${arxivId}`;
+            }
+
+            links.push({
+                arxiv_id: arxivId,
+                arxiv_url: arxivUrl,
+                row_number: item._rowNumber || (index + 2),
+                metadata: {
+                    title: item.Title || '',
+                    authors: item.Authors || '',
+                    abstract: item.Abstract || '',
+                    paper_url: item.Abstract_URL || arxivUrl,
+                    project_url: item.Project_URL || '',
+                    publish_date: item.Published_Date || '',
+                    primary_category: item.Primary_Category || '',
+                    all_categories: item.All_Categories || '',
+                    institution: item.research_entities || ''
+                }
+            });
+        });
+
+        return links;
+    }
 }
 
 module.exports = ExcelParser;

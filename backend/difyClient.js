@@ -179,6 +179,77 @@ class DifyClient {
             return null;
         }
     }
+
+    /**
+     * 批量模式：发送arXiv URL数组
+     * @param {Array} arxivUrls - arXiv链接数组
+     * @returns {Promise<object>} - 返回流式响应
+     */
+    async runWorkflowBatch(arxivUrls) {
+        const url = `${this.baseUrl}/workflows/run`;
+
+        const payload = {
+            inputs: {
+                [config.DIFY_BATCH_INPUT_VARIABLE]: arxivUrls
+            },
+            response_mode: 'streaming',
+            user: this.userId
+        };
+
+        this.logger.info(`[Batch] 批量执行Workflow: ${arxivUrls.length} 个链接`);
+        this.logger.info(`[Batch] 输入变量: ${config.DIFY_BATCH_INPUT_VARIABLE}`);
+
+        try {
+            const response = await axios.post(url, payload, {
+                headers: {
+                    ...this.headers,
+                    'Content-Type': 'application/json'
+                },
+                responseType: 'stream',
+                timeout: 900000 // 15分钟超时（批量处理时间更长）
+            });
+
+            return response;
+        } catch (error) {
+            this.logger.error(`[Batch] Workflow执行失败: ${error.message}`);
+            throw error;
+        }
+    }
+
+    /**
+     * 单个模式：发送单个arXiv URL
+     * @param {string} arxivUrl - 单个arXiv链接
+     * @returns {Promise<object>} - 返回流式响应
+     */
+    async runWorkflowSingle(arxivUrl) {
+        const url = `${this.baseUrl}/workflows/run`;
+
+        const payload = {
+            inputs: {
+                [config.DIFY_SINGLE_INPUT_VARIABLE]: arxivUrl
+            },
+            response_mode: 'streaming',
+            user: this.userId
+        };
+
+        this.logger.info(`[Single] 单个执行Workflow: ${arxivUrl}`);
+
+        try {
+            const response = await axios.post(url, payload, {
+                headers: {
+                    ...this.headers,
+                    'Content-Type': 'application/json'
+                },
+                responseType: 'stream',
+                timeout: 300000 // 5分钟超时
+            });
+
+            return response;
+        } catch (error) {
+            this.logger.error(`[Single] Workflow执行失败: ${error.message}`);
+            throw error;
+        }
+    }
 }
 
 module.exports = DifyClient;

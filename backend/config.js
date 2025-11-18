@@ -33,6 +33,12 @@ class Config {
         // 服务器配置
         this.HOST = '127.0.0.1';
         this.PORT = 8000;
+
+        // Dify批量处理配置
+        this.DIFY_BATCH_MODE = process.env.DIFY_BATCH_MODE || 'batch'; // batch: 批量数组 | sequential: 串行
+        this.DIFY_BATCH_INPUT_VARIABLE = process.env.DIFY_BATCH_INPUT_VARIABLE || 'arxiv_urls';
+        this.DIFY_SINGLE_INPUT_VARIABLE = process.env.DIFY_SINGLE_INPUT_VARIABLE || 'arxiv_url';
+        this.DIFY_BATCH_OUTPUT_VARIABLE = process.env.DIFY_BATCH_OUTPUT_VARIABLE || 'results'; // Dify返回的数组变量名
     }
 
     /**
