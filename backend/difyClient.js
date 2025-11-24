@@ -206,7 +206,7 @@ class DifyClient {
                     'Content-Type': 'application/json'
                 },
                 responseType: 'stream',
-                timeout: 900000 // 15分钟超时（批量处理时间更长）
+                timeout: 1800000 // 30分钟超时（批量处理时间更长）
             });
 
             return response;
@@ -241,7 +241,7 @@ class DifyClient {
                     'Content-Type': 'application/json'
                 },
                 responseType: 'stream',
-                timeout: 300000 // 5分钟超时
+                timeout: 600000 // 10分钟超时
             });
 
             return response;
