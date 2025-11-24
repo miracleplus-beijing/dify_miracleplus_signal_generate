@@ -185,6 +185,19 @@ class SupabaseClient {
             }
         }
 
+        // 🆕 解析更新日期
+        let updatedDate = null;
+        if (row.Updated_Date) {
+            try {
+                const date = new Date(row.Updated_Date);
+                if (!isNaN(date.getTime())) {
+                    updatedDate = date.toISOString().split('T')[0];
+                }
+            } catch (error) {
+                console.warn(`更新日期解析失败: ${row.Updated_Date}`);
+            }
+        }
+
         // 获取arXiv ID
         const arxivId = row.ID || '';
 
@@ -204,6 +217,15 @@ class SupabaseClient {
             arxiv_id: arxivId,
             primary_category: row.Primary_Category || '',
             all_categories: row.All_Categories || '',
+            doi: row.DOI || '',
+
+            // 🆕 完整字段
+            updated_date: updatedDate,
+            pdf_url: row.PDF_URL || '',
+            comment: row.Comment || '',
+            journal_ref: row.Journal_Ref || '',
+            entry_id: row.Entry_ID || '',
+
             status: 'published',
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
@@ -211,7 +233,7 @@ class SupabaseClient {
 
         // 清理空值字段
         Object.keys(podcastData).forEach(key => {
-            if (podcastData[key] === null || podcastData[key] === undefined) {
+            if (podcastData[key] === null || podcastData[key] === undefined || podcastData[key] === '') {
                 delete podcastData[key];
             }
         });

@@ -319,7 +319,15 @@ class ExcelParser {
                     publish_date: item.Published_Date || '',
                     primary_category: item.Primary_Category || '',
                     all_categories: item.All_Categories || '',
-                    institution: item.research_entities || ''
+                    institution: item.research_entities || '',
+
+                    // 🆕 完整字段
+                    updated_date: item.Updated_Date || '',
+                    pdf_url: item.PDF_URL || '',
+                    comment: item.Comment || '',
+                    journal_ref: item.Journal_Ref || '',
+                    entry_id: item.Entry_ID || '',
+                    doi: item.DOI || ''
                 }
             });
         });

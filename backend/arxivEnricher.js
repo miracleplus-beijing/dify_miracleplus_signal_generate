@@ -32,6 +32,7 @@ class ArxivEnricher {
     getMissingFields(item) {
         const missing = [];
 
+        // 核心必填字段
         if (!item.Title || item.Title.trim() === '') missing.push('Title');
         if (!item.Authors || item.Authors.trim() === '') missing.push('Authors');
         if (!item.Abstract || item.Abstract.trim() === '') missing.push('Abstract');
@@ -39,6 +40,14 @@ class ArxivEnricher {
         if (!item.Abstract_URL || item.Abstract_URL.trim() === '') missing.push('Abstract_URL');
         if (!item.Primary_Category || item.Primary_Category.trim() === '') missing.push('Primary_Category');
         if (!item.All_Categories || item.All_Categories.trim() === '') missing.push('All_Categories');
+
+        // 🆕 扩展字段（总是尝试补全）
+        if (!item.Updated_Date || item.Updated_Date.trim() === '') missing.push('Updated_Date');
+        if (!item.PDF_URL || item.PDF_URL.trim() === '') missing.push('PDF_URL');
+        if (!item.Comment || item.Comment.trim() === '') missing.push('Comment');
+        if (!item.Journal_Ref || item.Journal_Ref.trim() === '') missing.push('Journal_Ref');
+        if (!item.Entry_ID || item.Entry_ID.trim() === '') missing.push('Entry_ID');
+        if (!item.DOI || item.DOI.trim() === '') missing.push('DOI');
 
         return missing;
     }
@@ -131,9 +140,14 @@ class ArxivEnricher {
             Abstract_URL: arxivPaper.id || '',
             Primary_Category: arxivPaper.primary_category || '',
             All_Categories: allCategories,
-            // 额外信息（可选）
-            _arxiv_pdf_url: arxivPaper.pdf_url || '',
-            _arxiv_doi: arxivPaper.doi || ''
+
+            // 🆕 新增完整字段
+            Updated_Date: arxivPaper.updated || '',
+            PDF_URL: arxivPaper.pdf_url || '',
+            Comment: arxivPaper.comment || '',
+            Journal_Ref: arxivPaper.journal_ref || '',
+            Entry_ID: arxivPaper.id || '',  // 完整条目ID
+            DOI: arxivPaper.doi || ''
         };
     }
 
@@ -232,11 +246,12 @@ class ArxivEnricher {
             const enrichedItem = await this.enrichItem(item);
             enrichedData.push(enrichedItem);
 
-            // API速率限制：每次请求间隔
-            if (i < dataArray.length - 1) {
-                this.logger.info(`等待 ${this.config.apiDelayMs}ms 后继续...`);
-                await new Promise(resolve => setTimeout(resolve, this.config.apiDelayMs));
-            }
+            // 🚀 方案A优化：移除固定延迟，立即处理下一条
+            // 原代码（已删除）：
+            // if (i < dataArray.length - 1) {
+            //     this.logger.info(`等待 ${this.config.apiDelayMs}ms 后继续...`);
+            //     await new Promise(resolve => setTimeout(resolve, this.config.apiDelayMs));
+            // }
         }
 
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);

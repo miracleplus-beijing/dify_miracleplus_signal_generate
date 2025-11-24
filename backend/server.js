@@ -157,22 +157,39 @@ async function processSingleArxiv(arxivUrl, arxivId, metadata, difyClient, logge
                         if (eventData) {
                             const data = JSON.parse(eventData);
 
-                            if (data.event === 'workflow_finished' && data.data?.status === 'succeeded') {
-                                const outputs = data.data.outputs || {};
-                                finalResult = {
-                                    podcast_title: outputs.podcast_title || '',
-                                    podcast_script: outputs.podcast_script || ''
-                                };
+                            // 🔍 增强日志：记录所有事件类型
+                            logger.info(`[Single] 收到事件: ${data.event}, arxiv_id: ${arxivId}`);
+
+                            if (data.event === 'workflow_finished') {
+                                logger.info(`[Single] Workflow完成状态: ${data.data?.status}`);
+                                logger.info(`[Single] 完整输出: ${JSON.stringify(data.data?.outputs || {}, null, 2)}`);
+
+                                if (data.data?.status === 'succeeded') {
+                                    const outputs = data.data.outputs || {};
+
+                                    // 🔍 记录输出字段
+                                    logger.info(`[Single] 检测到的输出字段: ${Object.keys(outputs).join(', ')}`);
+
+                                    finalResult = {
+                                        podcast_title: outputs.podcast_title || '',
+                                        podcast_script: outputs.podcast_script || ''
+                                    };
+
+                                    logger.info(`[Single] 解析结果 - title: ${finalResult.podcast_title ? '有' : '无'}, script: ${finalResult.podcast_script ? '有' : '无'}`);
+                                } else if (data.data?.status === 'failed') {
+                                    logger.error(`[Single] Workflow失败: ${JSON.stringify(data.data.error || {})}`);
+                                }
                             }
                         }
                     } catch (e) {
                         logger.error(`[Single] 解析响应失败: ${e.message}`);
+                        logger.error(`[Single] 问题数据: ${eventStr.substring(0, 200)}`);
                     }
                 }
             });
 
             response.data.on('end', () => {
-                if (finalResult) {
+                if (finalResult && (finalResult.podcast_title || finalResult.podcast_script)) {
                     logger.info(`[Single] ✓ 完成: ${arxivId}`);
                     resolve({
                         success: true,
@@ -184,7 +201,12 @@ async function processSingleArxiv(arxivUrl, arxivId, metadata, difyClient, logge
                         error: null
                     });
                 } else {
-                    reject(new Error(`未获取到有效结果: ${arxivId}`));
+                    const errorMsg = finalResult
+                        ? `Dify返回结果为空 (title: ${!!finalResult.podcast_title}, script: ${!!finalResult.podcast_script})`
+                        : `Dify未返回workflow_finished事件或状态非succeeded`;
+
+                    logger.error(`[Single] ✗ 无效结果: ${arxivId} - ${errorMsg}`);
+                    reject(new Error(`未获取到有效结果: ${arxivId} - ${errorMsg}`));
                 }
             });
 
