@@ -230,6 +230,274 @@ async function processSingleArxiv(arxivUrl, arxivId, metadata, difyClient, logge
 }
 
 /**
+ * 🆕 生成单个音频文件
+ */
+async function generateSingleAudio(script, title, arxivId, logger) {
+    try {
+        if (config.SKIP_TTS) {
+            logger.info('跳过音频生成（SKIP_TTS=true）');
+            return null;
+        }
+
+        const outputDir = config.getOutputDir();
+        const tempScriptFile = path.join(outputDir, `temp_${arxivId}.json`);
+
+        // 写入临时脚本文件
+        fs.writeFileSync(tempScriptFile, JSON.stringify([{
+            title: title,
+            script: script,
+            arxiv_id: arxivId
+        }], null, 2), 'utf8');
+
+        const pythonExecutable = config.PODCAST_PYTHON;
+        const ttsScriptPath = path.join(projectRoot, 'podcast_generator', 'produce_podcast.py');
+
+        const args = [
+            ttsScriptPath,
+            '--script', tempScriptFile,
+            '--output-dir', outputDir,
+            '--single-mode'
+        ];
+
+        logger.info(`启动TTS: ${pythonExecutable} ${args.join(' ')}`);
+
+        return new Promise((resolve, reject) => {
+            const child = spawn(pythonExecutable, args, {
+                cwd: projectRoot,
+                env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+            });
+
+            let audioFilePath = null;
+
+            child.stdout.on('data', (chunk) => {
+                const output = chunk.toString();
+                logger.info(`[TTS] ${output}`);
+
+                const match = output.match(/输出文件[:：]\s*(.+\.mp3)$/m);
+                if (match) {
+                    audioFilePath = match[1].trim();
+                }
+            });
+
+            child.stderr.on('data', (chunk) => {
+                logger.error(`[TTS][stderr] ${chunk.toString()}`);
+            });
+
+            child.on('close', (code) => {
+                // 清理临时文件
+                try {
+                    if (fs.existsSync(tempScriptFile)) {
+                        fs.unlinkSync(tempScriptFile);
+                    }
+                } catch (e) {
+                    logger.warning(`清理临时文件失败: ${e.message}`);
+                }
+
+                if (code === 0 && audioFilePath) {
+                    resolve(audioFilePath);
+                } else {
+                    reject(new Error(`音频生成失败，退出码: ${code}`));
+                }
+            });
+
+            child.on('error', (err) => {
+                logger.error(`TTS进程启动失败: ${err.message}`);
+                reject(err);
+            });
+        });
+
+    } catch (error) {
+        logger.error(`生成单个音频失败: ${error.message}`);
+        return null;
+    }
+}
+
+/**
+ * 🆕 单条模式：逐条处理并即时上传到Supabase
+ */
+async function processSequentialWithUpload(
+    arxivLinks,
+    excelData,
+    channelId,
+    difyClient,
+    supabaseClient,
+    logger,
+    sendEvent
+) {
+    const results = {
+        success: 0,
+        failed: 0,
+        totalItems: arxivLinks.length,
+        details: []
+    };
+
+    const maxRetries = config.SEQUENTIAL_MODE_RETRY_ATTEMPTS;
+    const retryDelay = config.SEQUENTIAL_MODE_RETRY_DELAY_MS;
+
+    // 获取频道信息（一次性查询）
+    const { data: channelData, error: channelError } = await supabaseClient.supabase
+        .from('channels')
+        .select('id, name, cover_url')
+        .eq('id', channelId)
+        .single();
+
+    if (channelError || !channelData) {
+        throw new Error(`获取频道信息失败: ${channelError?.message || '频道不存在'}`);
+    }
+
+    // 获取频道存储配置（用于音频上传）
+    const channelConfig = await supabaseClient.getChannelStorageConfig(channelId, logger);
+
+    for (let i = 0; i < arxivLinks.length; i++) {
+        const link = arxivLinks[i];
+        const itemNum = i + 1;
+        const progressBase = 30 + Math.floor((i / arxivLinks.length) * 60); // 30-90%
+
+        logger.info(`\n========== 处理第 ${itemNum}/${arxivLinks.length} 条: ${link.arxiv_id} ==========`);
+
+        let retryCount = 0;
+        let success = false;
+        let itemResult = null;
+
+        // 🔁 重试循环
+        while (retryCount <= maxRetries && !success) {
+            try {
+                // Step 1: 调用Dify生成播客脚本
+                sendEvent('progress', {
+                    status: 'processing_single_item',
+                    message: `调用Dify生成脚本: ${link.arxiv_id}`,
+                    progress: progressBase,
+                    current: itemNum,
+                    total: arxivLinks.length,
+                    retry_count: retryCount
+                });
+
+                const difyResult = await processSingleArxiv(
+                    link.arxiv_url,
+                    link.arxiv_id,
+                    link.metadata,
+                    difyClient,
+                    logger
+                );
+
+                if (!difyResult.success) {
+                    throw new Error(`Dify处理失败: ${difyResult.error}`);
+                }
+
+                // Step 2: 生成单个音频
+                let audioUrl = '';
+                if (!config.SKIP_TTS) {
+                    sendEvent('progress', {
+                        status: 'processing_single_item',
+                        message: `生成音频: ${link.arxiv_id}`,
+                        progress: progressBase + 1,
+                        current: itemNum,
+                        total: arxivLinks.length
+                    });
+
+                    const audioPath = await generateSingleAudio(
+                        difyResult.podcast_script,
+                        difyResult.podcast_title,
+                        link.arxiv_id,
+                        logger
+                    );
+
+                    if (audioPath && fs.existsSync(audioPath)) {
+                        // Step 3: 上传音频到Supabase Storage
+                        const uploadResult = await uploadAudioFiles(
+                            [{ local_path: audioPath, arxiv_id: link.arxiv_id }],
+                            channelConfig,
+                            supabaseClient,
+                            logger,
+                            sendEvent
+                        );
+
+                        if (uploadResult.urls && uploadResult.urls.length > 0) {
+                            audioUrl = uploadResult.urls[0].url;
+                        }
+                    }
+                }
+
+                // Step 4: 立即上传到Supabase数据库
+                const rowData = excelData.find(row => row.ID === link.arxiv_id);
+                if (rowData) {
+                    const podcastData = supabaseClient.preparePodcastData(
+                        rowData,
+                        channelData,
+                        { [link.arxiv_id]: audioUrl },
+                        { [link.arxiv_id]: difyResult.podcast_title }
+                    );
+
+                    const { data: podcast, error } = await supabaseClient.supabase
+                        .from('podcasts')
+                        .insert(podcastData)
+                        .select()
+                        .single();
+
+                    if (error) {
+                        throw new Error(`数据库插入失败: ${error.message}`);
+                    }
+
+                    logger.info(`✅ [${itemNum}/${arxivLinks.length}] 成功上传到数据库: ${link.arxiv_id}`);
+                }
+
+                // 成功标记
+                success = true;
+                results.success++;
+                itemResult = { success: true, arxiv_id: link.arxiv_id };
+
+                sendEvent('progress', {
+                    status: 'single_item_success',
+                    message: `完成: ${link.arxiv_id}`,
+                    progress: progressBase + 2,
+                    current: itemNum,
+                    total: arxivLinks.length
+                });
+
+            } catch (error) {
+                retryCount++;
+                logger.error(`❌ [${itemNum}/${arxivLinks.length}] 处理失败 (第${retryCount}次): ${error.message}`);
+
+                if (retryCount <= maxRetries) {
+                    sendEvent('progress', {
+                        status: 'single_item_retrying',
+                        message: `第${retryCount}次重试: ${link.arxiv_id}`,
+                        progress: progressBase,
+                        current: itemNum,
+                        total: arxivLinks.length,
+                        retry_count: retryCount,
+                        max_retries: maxRetries
+                    });
+
+                    await new Promise(resolve => setTimeout(resolve, retryDelay));
+                } else {
+                    // 最终失败
+                    results.failed++;
+                    itemResult = { success: false, arxiv_id: link.arxiv_id, error: error.message };
+
+                    sendEvent('progress', {
+                        status: 'single_item_failed',
+                        message: `最终失败: ${link.arxiv_id}`,
+                        progress: progressBase + 2,
+                        current: itemNum,
+                        total: arxivLinks.length,
+                        retry_count: retryCount,
+                        max_retries: maxRetries
+                    });
+                }
+            }
+        }
+
+        results.details.push(itemResult);
+    }
+
+    logger.info(`\n========== 单条模式处理完成 ==========`);
+    logger.info(`总计: ${results.totalItems}, 成功: ${results.success}, 失败: ${results.failed}`);
+
+    return results;
+}
+
+/**
  * 上传音频文件到Supabase Storage并更新数据库
  * @param {Array} files - 文件列表 [{local_path, arxiv_id, channel_id}]
  * @param {Object} channelConfig - 频道配置 {storagePath, namingPrefix}
@@ -646,6 +914,7 @@ app.post('/api/execute', upload.single('file'), async (req, res) => {
         // 获取 workflow 类型和频道ID（从请求体中）
         const workflowType = req.body.workflow || 'PODCAST';
         const channelId = req.body.channelId || '355ed9b9-58d6-4716-a542-cadc13ae8ef4'; // 默认使用论文前沿日报
+        const processingMode = req.body.processingMode || 'batch'; // 🆕 接收处理模式
         const workflowConfig = config.getWorkflowConfig(workflowType);
 
         if (!workflowConfig) {
@@ -653,6 +922,8 @@ app.post('/api/execute', upload.single('file'), async (req, res) => {
             res.end();
             return;
         }
+
+        logger.info(`使用处理模式: ${processingMode}`);
 
         tempFilePath = req.file.path;
         const fileName = req.file.originalname;
@@ -743,47 +1014,89 @@ app.post('/api/execute', upload.single('file'), async (req, res) => {
             }
         }
 
-        // 🚀 调用Dify处理arXiv链接（新流程）
+        // 🚀 调用Dify处理arXiv链接（根据模式选择处理方式）
         const difyClient = new DifyClient(logger, workflowType);
         let podcastResults = [];
+        let audioUploadResults = null;
 
-        if (config.DIFY_BATCH_MODE === 'batch') {
-            // ========== 批量模式 ==========
+        if (processingMode === 'sequential') {
+            // ========== 🆕 单条模式：逐条处理+即时上传 ==========
             sendEvent('progress', {
-                status: 'dify_batch_processing',
-                message: `使用批量模式处理 ${arxivLinks.length} 个论文...`,
+                status: 'sequential_mode_start',
+                message: `启用单条模式，将逐个处理 ${arxivLinks.length} 个论文...`,
                 progress: 30
             });
 
-            podcastResults = await processBatchArxiv(arxivLinks, difyClient, logger, sendEvent);
+            const sequentialResults = await processSequentialWithUpload(
+                arxivLinks,
+                enrichedData,
+                channelId,
+                difyClient,
+                supabaseClient,
+                logger,
+                sendEvent
+            );
+
+            // 单条模式已完成所有上传，直接返回结果
+            sendEvent('success', {
+                status: 'succeeded',
+                message: '执行成功！',
+                progress: 100,
+                processing_stats: {
+                    total: sequentialResults.totalItems,
+                    success: sequentialResults.success,
+                    failed: sequentialResults.failed
+                },
+                supabase_results: {
+                    success: sequentialResults.success,
+                    failed: sequentialResults.failed,
+                    errors: sequentialResults.details.filter(d => !d.success)
+                }
+            });
+
+            res.end();
+            return; // 🚨 单条模式提前结束，不执行后续批量逻辑
 
         } else {
-            // ========== 串行模式 ==========
-            sendEvent('progress', {
-                status: 'dify_sequential_processing',
-                message: `使用串行模式处理 ${arxivLinks.length} 个论文...`,
-                progress: 30
-            });
-
-            for (let i = 0; i < arxivLinks.length; i++) {
-                const link = arxivLinks[i];
-                const progressPercent = 30 + Math.floor((i / arxivLinks.length) * 25); // 30-55%
-
+            // ========== 批量模式（保持原有逻辑） ==========
+            if (config.DIFY_BATCH_MODE === 'batch') {
+                // ========== 批量模式 ==========
                 sendEvent('progress', {
-                    status: 'processing_arxiv',
-                    message: `正在处理 [${i + 1}/${arxivLinks.length}]: ${link.arxiv_id}`,
-                    progress: progressPercent
+                    status: 'dify_batch_processing',
+                    message: `使用批量模式处理 ${arxivLinks.length} 个论文...`,
+                    progress: 30
                 });
 
-                const result = await processSingleArxiv(
-                    link.arxiv_url,
-                    link.arxiv_id,
-                    link.metadata,
-                    difyClient,
-                    logger
-                );
+                podcastResults = await processBatchArxiv(arxivLinks, difyClient, logger, sendEvent);
 
-                podcastResults.push(result);
+            } else {
+                // ========== 串行模式 ==========
+                sendEvent('progress', {
+                    status: 'dify_sequential_processing',
+                    message: `使用串行模式处理 ${arxivLinks.length} 个论文...`,
+                    progress: 30
+                });
+
+                for (let i = 0; i < arxivLinks.length; i++) {
+                    const link = arxivLinks[i];
+                    const progressPercent = 30 + Math.floor((i / arxivLinks.length) * 25); // 30-55%
+
+                    sendEvent('progress', {
+                        status: 'processing_arxiv',
+                        message: `正在处理 [${i + 1}/${arxivLinks.length}]: ${link.arxiv_id}`,
+                        progress: progressPercent
+                    });
+
+                    const result = await processSingleArxiv(
+                        link.arxiv_url,
+                        link.arxiv_id,
+                        link.metadata,
+                        difyClient,
+                        logger
+                    );
+
+                    podcastResults.push(result);
+                }
             }
         }
 

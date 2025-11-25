@@ -42,6 +42,22 @@
                         <p class="setting-hint">选择要上传到的播客频道</p>
                     </div>
 
+                    <!-- 处理模式选择 -->
+                    <div class="setting-group">
+                        <label for="processingModeSelect">
+                            处理模式
+                            <span class="label-badge">实验性功能</span>
+                        </label>
+                        <select id="processingModeSelect" class="setting-select">
+                            <option value="batch">批量模式 - 全部处理完后统一上传</option>
+                            <option value="sequential">单条模式 - 每条处理完立即上传（支持重试）</option>
+                        </select>
+                        <p class="setting-hint">
+                            <strong>批量模式</strong>: ⚡ 速度快，适合小批量数据（10条以内）<br>
+                            <strong>单条模式</strong>: 🔄 可重试，实时上传，适合大批量数据或网络不稳定场景
+                        </p>
+                    </div>
+
                     <!-- Workflow 选择 -->
                     <div class="setting-group">
                         <label for="workflowSelect">选择 Workflow</label>

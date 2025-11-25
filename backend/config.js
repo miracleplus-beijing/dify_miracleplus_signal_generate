@@ -39,6 +39,31 @@ class Config {
         this.DIFY_BATCH_INPUT_VARIABLE = process.env.DIFY_BATCH_INPUT_VARIABLE || 'arxiv_urls';
         this.DIFY_SINGLE_INPUT_VARIABLE = process.env.DIFY_SINGLE_INPUT_VARIABLE || 'arxiv_url';
         this.DIFY_BATCH_OUTPUT_VARIABLE = process.env.DIFY_BATCH_OUTPUT_VARIABLE || 'results'; // Dify返回的数组变量名
+
+        // 单条模式重试配置
+        this.SEQUENTIAL_MODE_RETRY_ATTEMPTS = parseInt(process.env.SEQUENTIAL_RETRY_ATTEMPTS || '3');
+        this.SEQUENTIAL_MODE_RETRY_DELAY_MS = parseInt(process.env.SEQUENTIAL_RETRY_DELAY_MS || '5000');
+
+        // arXiv补全配置
+        this.ARXIV_ENRICH_ENABLED = process.env.ARXIV_ENRICH_ENABLED !== 'false';
+        this.ARXIV_API_DELAY_MS = parseInt(process.env.ARXIV_API_DELAY_MS || '1000');
+        this.ARXIV_MAX_RETRIES = parseInt(process.env.ARXIV_MAX_RETRIES || '3');
+        this.ARXIV_TIMEOUT_MS = parseInt(process.env.ARXIV_TIMEOUT_MS || '30000');
+
+        // 音频生成配置
+        this.SKIP_TTS = process.env.SKIP_TTS === '1';
+        this.PODCAST_PYTHON = process.env.PODCAST_PYTHON || 'python';
+
+        // 日志配置
+        this.LOG_LEVEL = process.env.LOG_LEVEL || 'info';
+        this.VERBOSE_LOGGING = process.env.VERBOSE_LOGGING === 'true';
+
+        // Supabase配置
+        this.SUPABASE_URL = process.env.SUPABASE_URL || '';
+        this.SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_API_KEY || '';
+
+        // 配置验证
+        this.validateConfig();
     }
 
     /**
@@ -106,6 +131,81 @@ class Config {
      */
     getLogsDir() {
         return path.join(this.getOutputDir(), 'logs');
+    }
+
+    /**
+     * 验证必需配置项
+     */
+    validateConfig() {
+        const errors = [];
+        const warnings = [];
+
+        // 验证Dify配置
+        if (!this.WORKFLOWS.PODCAST.apiKey) {
+            errors.push('❌ 缺少 DIFY_PODCAST_API_KEY');
+        }
+
+        // 验证Supabase配置
+        if (!this.SUPABASE_SERVICE_KEY) {
+            warnings.push('⚠️  未配置 SUPABASE_SERVICE_ROLE_API_KEY（Supabase功能将不可用）');
+        }
+
+        // 验证重试配置范围
+        if (this.SEQUENTIAL_MODE_RETRY_ATTEMPTS < 1 || this.SEQUENTIAL_MODE_RETRY_ATTEMPTS > 10) {
+            warnings.push('⚠️  SEQUENTIAL_RETRY_ATTEMPTS 建议范围: 1-10');
+        }
+
+        // 输出验证结果
+        if (errors.length > 0 || warnings.length > 0) {
+            console.log('\n========== 配置验证 ==========');
+
+            if (errors.length > 0) {
+                errors.forEach(err => console.error(err));
+            }
+
+            if (warnings.length > 0) {
+                warnings.forEach(warn => console.warn(warn));
+            }
+
+            console.log('参考 .env.example 完善配置\n');
+
+            // 如果是关键配置缺失，终止程序
+            if (errors.length > 0) {
+                process.exit(1);
+            }
+        } else {
+            console.log('✅ 配置验证通过');
+        }
+    }
+
+    /**
+     * 获取完整配置摘要（用于调试）
+     */
+    getConfigSummary() {
+        return {
+            dify: {
+                baseUrl: this.DIFY_BASE_URL,
+                batchMode: this.DIFY_BATCH_MODE,
+                workflows: Object.keys(this.WORKFLOWS)
+            },
+            processing: {
+                sequentialRetries: this.SEQUENTIAL_MODE_RETRY_ATTEMPTS,
+                retryDelay: this.SEQUENTIAL_MODE_RETRY_DELAY_MS
+            },
+            arxiv: {
+                enabled: this.ARXIV_ENRICH_ENABLED,
+                apiDelay: this.ARXIV_API_DELAY_MS,
+                maxRetries: this.ARXIV_MAX_RETRIES
+            },
+            tts: {
+                skipTTS: this.SKIP_TTS,
+                pythonPath: this.PODCAST_PYTHON
+            },
+            server: {
+                host: this.HOST,
+                port: this.PORT
+            }
+        };
     }
 }
 

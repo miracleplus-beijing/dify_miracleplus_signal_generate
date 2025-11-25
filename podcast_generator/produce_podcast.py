@@ -299,6 +299,7 @@ def main():
     parser.add_argument('--channel-id', help='频道ID（用于记录）')
     parser.add_argument('--verbose', action='store_true', help='显示详细日志')
     parser.add_argument('--check-only', action='store_true', help='仅检查配置，不生成音频')
+    parser.add_argument('--single-mode', action='store_true', help='单条模式：仅处理单个播客脚本（JSON数组第一个元素）')
 
     args = parser.parse_args()
 
@@ -333,6 +334,18 @@ def main():
     print(f"\n[Read] 解析播客稿: {args.script}")
 
     segments = parse_podcast_script(args.script, arxiv_id_override=None, arxiv_mapping=arxiv_mapping)
+
+    # 🆕 单条模式处理
+    if args.single_mode:
+        print("[Mode] 单条模式")
+        if len(segments) > 0:
+            segments = [segments[0]]  # 只保留第一个元素
+            print(f'[Mode] 单条模式，只处理第1个脚本: {segments[0].get("arxiv_id", "unknown")}')
+        else:
+            print('[ERROR] 单条模式下脚本数据为空')
+            sys.exit(1)
+    else:
+        print("[Mode] 批量模式")
 
     # 生成音频
     print(f"\n[Audio] 开始生成 {len(segments)} 个音频文件...")

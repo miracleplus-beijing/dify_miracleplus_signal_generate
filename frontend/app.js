@@ -23,6 +23,7 @@ const settingsModal = document.getElementById('settingsModal');
 const closeSettingsBtn = document.getElementById('closeSettingsBtn');
 const workflowSelect = document.getElementById('workflowSelect');
 const channelSelect = document.getElementById('channelSelect');
+const processingModeSelect = document.getElementById('processingModeSelect');
 const useDefaultPath = document.getElementById('useDefaultPath');
 const customPathGroup = document.getElementById('customPathGroup');
 const customPathInput = document.getElementById('customPathInput');
@@ -33,6 +34,7 @@ const cancelBtn = document.getElementById('cancelBtn');
 let selectedFile = null;
 let resultFilename = null;
 let currentWorkflow = 'PODCAST'; // 默认 workflow
+let currentProcessingMode = 'batch'; // 默认批量模式
 let availableWorkflows = [];
 let abortController = null; // 用于取消请求
 
@@ -86,6 +88,7 @@ function loadSettings() {
     const savedWorkflow = localStorage.getItem('selectedWorkflow');
     const savedPath = localStorage.getItem('customOutputPath');
     const useDefault = localStorage.getItem('useDefaultPath');
+    const savedMode = localStorage.getItem('processingMode');
 
     if (savedWorkflow) {
         currentWorkflow = savedWorkflow;
@@ -99,6 +102,14 @@ function loadSettings() {
     if (useDefault === 'false') {
         useDefaultPath.checked = false;
         customPathGroup.classList.remove('hidden');
+    }
+
+    // 恢复处理模式
+    if (savedMode) {
+        currentProcessingMode = savedMode;
+        if (processingModeSelect) {
+            processingModeSelect.value = savedMode;
+        }
     }
 
     // 更新页面标题
@@ -167,13 +178,16 @@ saveSettingsBtn.addEventListener('click', async () => {
     const selectedWorkflow = workflowSelect.value;
     const customPath = customPathInput.value.trim();
     const isDefaultPath = useDefaultPath.checked;
+    const selectedMode = processingModeSelect.value;
 
     // 保存到 localStorage
     localStorage.setItem('selectedWorkflow', selectedWorkflow);
     localStorage.setItem('customOutputPath', customPath);
     localStorage.setItem('useDefaultPath', isDefaultPath);
+    localStorage.setItem('processingMode', selectedMode);
 
     currentWorkflow = selectedWorkflow;
+    currentProcessingMode = selectedMode;
 
     // 如果有自定义路径且未使用默认路径，发送到后端
     if (customPath && !isDefaultPath) {
@@ -284,6 +298,7 @@ async function executeWorkflow() {
     formData.append('file', selectedFile);
     formData.append('workflow', currentWorkflow); // 添加 workflow 参数
     formData.append('channelId', channelSelect.value); // 添加频道ID参数
+    formData.append('processingMode', currentProcessingMode); // 添加处理模式参数
 
     try {
         // 发起请求 (SSE)
@@ -466,6 +481,25 @@ function handleProgress(data) {
             const uploadStats = data.upload_results;
             addLog(`📊 上传统计: 成功 ${uploadStats.success || 0} 个, 失败 ${uploadStats.failed || 0} 个`, 'success');
         }
+    } else if (status === 'processing_single_item') {
+        const current = data.current || 0;
+        const total = data.total || 0;
+        addLog(`📝 [${current}/${total}] ${message}`, 'info');
+    } else if (status === 'single_item_success') {
+        const current = data.current || 0;
+        const total = data.total || 0;
+        addLog(`✅ [${current}/${total}] ${message}`, 'success');
+    } else if (status === 'single_item_failed') {
+        const current = data.current || 0;
+        const total = data.total || 0;
+        const retryInfo = data.retry_count ? ` (重试${data.retry_count}/${data.max_retries})` : '';
+        addLog(`❌ [${current}/${total}] ${message}${retryInfo}`, 'error');
+    } else if (status === 'single_item_retrying') {
+        const current = data.current || 0;
+        const total = data.total || 0;
+        addLog(`🔄 [${current}/${total}] 正在重试...`, 'info');
+    } else if (status === 'sequential_mode_start') {
+        addLog('🔄 单条模式已启动，将逐个处理并实时上传...', 'info');
     }
 }
 
