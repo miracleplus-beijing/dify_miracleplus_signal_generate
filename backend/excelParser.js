@@ -303,7 +303,7 @@ class ExcelParser {
                 arxivUrl = arxivId;
             } else {
                 // 构造标准arXiv URL
-                arxivUrl = `https://arxiv.org/abs/${arxivId}`;
+                arxivUrl = `https://arxiv.org/pdf/${arxivId}`;
             }
 
             links.push({

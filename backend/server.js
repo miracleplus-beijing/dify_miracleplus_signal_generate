@@ -273,9 +273,12 @@ async function generateSingleAudio(script, title, arxivId, logger) {
                 const output = chunk.toString();
                 logger.info(`[TTS] ${output}`);
 
-                const match = output.match(/输出文件[:：]\s*(.+\.mp3)$/m);
+                // 修复：兼容Python输出格式（包含前导空格）
+                // 原输出: "     输出文件: 2511.10222v1.mp3"
+                const match = output.match(/输出文件[:：]\s*(.+\.mp3)\s*$/m);
                 if (match) {
                     audioFilePath = match[1].trim();
+                    logger.info(`[TTS] ✓ 解析到音频文件路径: ${audioFilePath}`);
                 }
             });
 
@@ -288,13 +291,42 @@ async function generateSingleAudio(script, title, arxivId, logger) {
                 try {
                     if (fs.existsSync(tempScriptFile)) {
                         fs.unlinkSync(tempScriptFile);
+                        logger.info(`[TTS] 临时脚本文件已删除: ${tempScriptFile}`);
                     }
                 } catch (e) {
                     logger.warning(`清理临时文件失败: ${e.message}`);
                 }
 
+                logger.info(`[TTS] Python进程结束，退出码: ${code}`);
+                logger.info(`[TTS] 解析到的音频文件路径: ${audioFilePath || '未解析到路径'}`);
+
                 if (code === 0 && audioFilePath) {
-                    resolve(audioFilePath);
+                    // 验证文件是否真的存在
+                    if (fs.existsSync(audioFilePath)) {
+                        logger.info(`[TTS] ✓ 音频文件验证成功: ${audioFilePath}`);
+                        resolve(audioFilePath);
+                    } else {
+                        logger.error(`[TTS] ✗ 音频文件不存在: ${audioFilePath}`);
+                        // 尝试备用方案：直接构造路径
+                        const fallbackPath = path.join(outputDir, `${arxivId}.mp3`);
+                        logger.info(`[TTS] 尝试备用路径: ${fallbackPath}`);
+                        if (fs.existsSync(fallbackPath)) {
+                            logger.info(`[TTS] ✓ 备用路径验证成功: ${fallbackPath}`);
+                            resolve(fallbackPath);
+                        } else {
+                            reject(new Error(`音频文件未找到: ${audioFilePath}`));
+                        }
+                    }
+                } else if (code === 0 && !audioFilePath) {
+                    // 退出码正常但未解析到路径，尝试直接构造
+                    const fallbackPath = path.join(outputDir, `${arxivId}.mp3`);
+                    logger.warning(`[TTS] 未从输出解析到路径，尝试直接构造: ${fallbackPath}`);
+                    if (fs.existsSync(fallbackPath)) {
+                        logger.info(`[TTS] ✓ 备用路径验证成功: ${fallbackPath}`);
+                        resolve(fallbackPath);
+                    } else {
+                        reject(new Error(`音频生成成功但未找到文件: ${fallbackPath}`));
+                    }
                 } else {
                     reject(new Error(`音频生成失败，退出码: ${code}`));
                 }
@@ -409,11 +441,15 @@ async function processSequentialWithUpload(
                             channelConfig,
                             supabaseClient,
                             logger,
-                            sendEvent
+                            sendEvent,
+                            true  // skipDatabaseCheck = true (sequential模式)
                         );
 
                         if (uploadResult.urls && uploadResult.urls.length > 0) {
                             audioUrl = uploadResult.urls[0].url;
+                            logger.info(`[Sequential] 音频上传并验证成功: ${audioUrl}`);
+                        } else {
+                            throw new Error(`音频上传失败：未获得有效的URL`);
                         }
                     }
                 }
@@ -497,6 +533,308 @@ async function processSequentialWithUpload(
     return results;
 }
 
+// ==================== 音频上传验证函数 ====================
+
+/**
+ * 验证Storage中的文件是否存在
+ */
+async function verifyStorageFile(storagePath, supabaseClient, logger) {
+    try {
+        const pathParts = storagePath.split('/');
+        const fileName = pathParts.pop();
+        const dirPath = pathParts.join('/');
+
+        logger.info(`[Verify] 检查Storage文件: ${storagePath}`);
+
+        const { data: files, error } = await supabaseClient.supabase.storage
+            .from('podcast-audios')
+            .list(dirPath, {
+                search: fileName
+            });
+
+        if (error) {
+            logger.error(`[Verify] Storage列表查询失败: ${error.message}`);
+            return { success: false, reason: `Storage query error: ${error.message}` };
+        }
+
+        if (!files || files.length === 0) {
+            logger.error(`[Verify] 文件不存在: ${storagePath}`);
+            return { success: false, reason: 'File not found in storage' };
+        }
+
+        const file = files.find(f => f.name === fileName);
+        if (!file) {
+            logger.error(`[Verify] 文件名不匹配: ${fileName}`);
+            return { success: false, reason: 'File name mismatch' };
+        }
+
+        if (!file.metadata || file.metadata.size === 0) {
+            logger.error(`[Verify] 文件大小为0`);
+            return { success: false, reason: 'File size is zero' };
+        }
+
+        logger.info(`[Verify] ✓ Storage文件验证通过 (大小: ${file.metadata.size} bytes)`);
+        return { success: true, fileSize: file.metadata.size };
+    } catch (error) {
+        logger.error(`[Verify] Storage验证异常: ${error.message}`);
+        return { success: false, reason: error.message };
+    }
+}
+
+/**
+ * 验证数据库中的记录是否正确
+ */
+async function verifyDatabaseRecord(arxivId, expectedAudioUrl, supabaseClient, logger, skipIfNotFound = false) {
+    try {
+        logger.info(`[Verify] 检查数据库记录: ${arxivId}`);
+
+        const { data, error } = await supabaseClient.supabase
+            .from('podcasts')
+            .select('arxiv_id, audio_url, status')
+            .eq('arxiv_id', arxivId);
+
+        if (error) {
+            logger.error(`[Verify] 数据库查询失败: ${error.message}`);
+            return { success: false, reason: `Database query error: ${error.message}` };
+        }
+
+        // 如果没有记录
+        if (!data || data.length === 0) {
+            if (skipIfNotFound) {
+                logger.info(`[Verify] 数据库记录不存在（跳过验证，sequential模式）`);
+                return { success: true, skipped: true, reason: 'Record not found but skipped in sequential mode' };
+            } else {
+                logger.error(`[Verify] 记录不存在: ${arxivId}`);
+                return { success: false, reason: 'Record not found in database' };
+            }
+        }
+
+        // 如果有多条记录，使用最新的一条
+        const record = data.length === 1 ? data[0] : data.sort((a, b) =>
+            new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at)
+        )[0];
+
+        if (data.length > 1) {
+            logger.warning(`[Verify] 发现 ${data.length} 条重复记录，使用最新的一条: ${record.id}`);
+        }
+
+        if (!record.audio_url || record.audio_url === '') {
+            if (skipIfNotFound) {
+                logger.info(`[Verify] audio_url为空（跳过验证，sequential模式）`);
+                return { success: true, skipped: true, reason: 'audio_url empty but skipped in sequential mode' };
+            } else {
+                logger.error(`[Verify] audio_url为空: ${arxivId}`);
+                return { success: false, reason: 'audio_url is empty' };
+            }
+        }
+
+        if (expectedAudioUrl && record.audio_url !== expectedAudioUrl) {
+            logger.error(`[Verify] audio_url不匹配: 期望=${expectedAudioUrl}, 实际=${record.audio_url}`);
+            return {
+                success: false,
+                reason: 'audio_url mismatch',
+                expected: expectedAudioUrl,
+                actual: record.audio_url
+            };
+        }
+
+        logger.info(`[Verify] ✓ 数据库记录验证通过`);
+        return { success: true, record: record };
+    } catch (error) {
+        logger.error(`[Verify] 数据库验证异常: ${error.message}`);
+        return { success: false, reason: error.message };
+    }
+}
+
+/**
+ * 验证音频文件是否可访问
+ */
+async function verifyAudioAccessibility(audioUrl, logger) {
+    try {
+        logger.info(`[Verify] 检查文件可访问性: ${audioUrl}`);
+
+        const axios = require('axios');
+        const response = await axios.head(audioUrl, {
+            timeout: 10000,
+            validateStatus: function (status) {
+                return status === 200;
+            }
+        });
+
+        if (response.status !== 200) {
+            logger.error(`[Verify] HTTP状态码异常: ${response.status}`);
+            return { success: false, reason: `HTTP status ${response.status}` };
+        }
+
+        const contentType = response.headers['content-type'];
+        if (!contentType || !contentType.includes('audio')) {
+            logger.error(`[Verify] Content-Type异常: ${contentType}`);
+            return { success: false, reason: `Invalid content-type: ${contentType}` };
+        }
+
+        const contentLength = parseInt(response.headers['content-length'] || '0');
+        if (contentLength === 0) {
+            logger.error(`[Verify] Content-Length为0`);
+            return { success: false, reason: 'Content-Length is zero' };
+        }
+
+        logger.info(`[Verify] ✓ 文件可访问性验证通过 (大小: ${contentLength} bytes)`);
+        return { success: true, size: contentLength };
+    } catch (error) {
+        logger.error(`[Verify] 可访问性验证异常: ${error.message}`);
+        return { success: false, reason: error.message };
+    }
+}
+
+/**
+ * 完整的音频上传验证流程
+ * @param {boolean} skipDatabaseCheck - 是否跳过数据库检查（sequential模式下为true）
+ */
+async function verifyAudioUpload(arxivId, audioUrl, storagePath, supabaseClient, logger, skipDatabaseCheck = false) {
+    logger.info(`[Verify] ========== 开始验证: ${arxivId} ==========`);
+
+    const results = {
+        success: true,
+        checks: {},
+        arxivId: arxivId
+    };
+
+    // Check 1: Storage文件存在性
+    logger.info(`[Verify] [1/4] Storage文件存在性验证`);
+    const storageCheck = await verifyStorageFile(storagePath, supabaseClient, logger);
+    results.checks.storage = storageCheck;
+    if (!storageCheck.success) {
+        results.success = false;
+        logger.error(`[Verify] ✗ 验证失败: Storage检查未通过`);
+        return results;
+    }
+
+    // Check 2: 数据库记录完整性（sequential模式下跳过）
+    if (skipDatabaseCheck) {
+        logger.info(`[Verify] [2/4] 数据库记录完整性验证（跳过，sequential模式）`);
+        results.checks.database = { success: true, skipped: true };
+    } else {
+        logger.info(`[Verify] [2/4] 数据库记录完整性验证`);
+        const dbCheck = await verifyDatabaseRecord(arxivId, audioUrl, supabaseClient, logger, false);
+        results.checks.database = dbCheck;
+        if (!dbCheck.success) {
+            results.success = false;
+            logger.error(`[Verify] ✗ 验证失败: 数据库检查未通过`);
+            return results;
+        }
+    }
+
+    // Check 3: 音频文件可访问性（sequential模式下跳过，因为URL可能还没更新到数据库）
+    if (skipDatabaseCheck) {
+        logger.info(`[Verify] [3/4] 音频文件可访问性验证（跳过，sequential模式）`);
+        results.checks.accessibility = { success: true, skipped: true };
+    } else {
+        logger.info(`[Verify] [3/4] 音频文件可访问性验证`);
+        const accessCheck = await verifyAudioAccessibility(audioUrl, logger);
+        results.checks.accessibility = accessCheck;
+        if (!accessCheck.success) {
+            results.success = false;
+            logger.error(`[Verify] ✗ 验证失败: 可访问性检查未通过`);
+            return results;
+        }
+    }
+
+    // Check 4: 数据一致性
+    logger.info(`[Verify] [4/4] 数据一致性验证`);
+    const urlArxivId = audioUrl.match(/([^\/]+)\.mp3$/)?.[1];
+    if (urlArxivId !== arxivId) {
+        results.success = false;
+        results.checks.consistency = {
+            success: false,
+            reason: 'arxiv_id mismatch in URL',
+            expected: arxivId,
+            actual: urlArxivId
+        };
+        logger.error(`[Verify] ✗ 验证失败: arxiv_id不一致 (期望=${arxivId}, URL中=${urlArxivId})`);
+        return results;
+    }
+    results.checks.consistency = { success: true };
+    logger.info(`[Verify] ✓ 数据一致性验证通过`);
+
+    logger.info(`[Verify] ✅ 所有验证通过: ${arxivId}`);
+    return results;
+}
+
+/**
+ * 回滚音频上传（删除Storage文件，清空数据库audio_url）
+ */
+async function rollbackAudioUpload(storagePath, arxivId, supabaseClient, logger) {
+    logger.warning(`[Rollback] ========== 开始回滚: ${arxivId} ==========`);
+
+    const rollbackResults = {
+        storageDeleted: false,
+        databaseUpdated: false,
+        errors: []
+    };
+
+    try {
+        // 1. 删除Storage文件
+        logger.info(`[Rollback] 删除Storage文件: ${storagePath}`);
+        const { error: storageError } = await supabaseClient.supabase.storage
+            .from('podcast-audios')
+            .remove([storagePath]);
+
+        if (storageError) {
+            logger.error(`[Rollback] Storage删除失败: ${storageError.message}`);
+            rollbackResults.errors.push(`Storage deletion failed: ${storageError.message}`);
+        } else {
+            rollbackResults.storageDeleted = true;
+            logger.info(`[Rollback] ✓ Storage文件已删除`);
+        }
+
+        // 2. 清空数据库audio_url字段（标记为draft状态）
+        logger.info(`[Rollback] 更新数据库记录: ${arxivId}`);
+
+        // 先检查记录是否存在
+        const { data: existingRecords } = await supabaseClient.supabase
+            .from('podcasts')
+            .select('id')
+            .eq('arxiv_id', arxivId);
+
+        if (existingRecords && existingRecords.length > 0) {
+            const { error: dbError } = await supabaseClient.supabase
+                .from('podcasts')
+                .update({
+                    audio_url: '',
+                    status: 'draft',
+                    updated_at: new Date().toISOString()
+                })
+                .eq('arxiv_id', arxivId);
+
+            if (dbError) {
+                logger.error(`[Rollback] 数据库更新失败: ${dbError.message}`);
+                rollbackResults.errors.push(`Database update failed: ${dbError.message}`);
+            } else {
+                rollbackResults.databaseUpdated = true;
+                logger.info(`[Rollback] ✓ 数据库记录已标记为draft`);
+            }
+        } else {
+            logger.info(`[Rollback] 数据库记录不存在，跳过更新（sequential模式正常情况）`);
+            rollbackResults.databaseUpdated = true; // 标记为成功，因为这在sequential模式下是正常的
+        }
+
+        const success = rollbackResults.storageDeleted || rollbackResults.databaseUpdated;
+        if (success) {
+            logger.info(`[Rollback] ✅ 回滚完成: ${arxivId}`);
+        } else {
+            logger.error(`[Rollback] ❌ 回滚失败: ${arxivId}`);
+        }
+
+        return { success, ...rollbackResults };
+    } catch (error) {
+        logger.error(`[Rollback] 回滚异常: ${error.message}`);
+        rollbackResults.errors.push(`Exception: ${error.message}`);
+        return { success: false, ...rollbackResults };
+    }
+}
+
+// ==================== 音频上传函数 ====================
+
 /**
  * 上传音频文件到Supabase Storage并更新数据库
  * @param {Array} files - 文件列表 [{local_path, arxiv_id, channel_id}]
@@ -504,9 +842,32 @@ async function processSequentialWithUpload(
  * @param {Object} supabaseClient - Supabase客户端
  * @param {Object} logger - 日志记录器
  * @param {Function} sendEvent - SSE事件发送函数
+ * @param {boolean} skipDatabaseCheck - 是否跳过数据库验证（sequential模式下为true）
  * @returns {Promise<Object>} 上传结果
  */
-async function uploadAudioFiles(files, channelConfig, supabaseClient, logger, sendEvent) {
+async function uploadAudioFiles(files, channelConfig, supabaseClient, logger, sendEvent, skipDatabaseCheck = false) {
+    logger.info('========== uploadAudioFiles 开始 ==========');
+    logger.info(`[Config] channelId: ${channelConfig.channelId}`);
+    logger.info(`[Config] storagePath: ${channelConfig.storagePath}`);
+    logger.info(`[Config] namingPrefix: ${channelConfig.namingPrefix}`);
+    logger.info(`[Config] fileFormat: ${channelConfig.fileFormat}`);
+    logger.info(`[Config] skipDatabaseCheck: ${skipDatabaseCheck}`);
+    logger.info(`[Files] 准备上传 ${files.length} 个文件`);
+
+    // 记录每个文件的详细信息
+    files.forEach((file, idx) => {
+        logger.info(`[File ${idx + 1}/${files.length}] arxiv_id: ${file.arxiv_id}`);
+        logger.info(`[File ${idx + 1}/${files.length}] local_path: ${file.local_path}`);
+        const fileExists = fs.existsSync(file.local_path);
+        logger.info(`[File ${idx + 1}/${files.length}] exists: ${fileExists}`);
+        if (fileExists) {
+            const stats = fs.statSync(file.local_path);
+            logger.info(`[File ${idx + 1}/${files.length}] size: ${stats.size} bytes (${(stats.size / 1024).toFixed(2)} KB)`);
+        } else {
+            logger.error(`[File ${idx + 1}/${files.length}] ✗ 文件不存在！`);
+        }
+    });
+
     const results = {
         success: 0,
         failed: 0,
@@ -530,6 +891,10 @@ async function uploadAudioFiles(files, channelConfig, supabaseClient, logger, se
             const storagePath = `${channelConfig.storagePath}/${arxiv_id}.mp3`;
 
             logger.info(`上传文件 [${i + 1}/${files.length}]: ${storagePath}`);
+            logger.info(`[Upload] Bucket: podcast-audios`);
+            logger.info(`[Upload] ContentType: audio/mpeg`);
+            logger.info(`[Upload] File size: ${fileData.length} bytes`);
+
             sendEvent('progress', {
                 status: 'audio_uploading',
                 message: `正在上传音频 (${i + 1}/${files.length}): ${arxiv_id}.mp3`,
@@ -537,6 +902,7 @@ async function uploadAudioFiles(files, channelConfig, supabaseClient, logger, se
             });
 
             // 上传到Supabase Storage
+            logger.info(`[Upload] 开始上传到Storage...`);
             const { data, error } = await supabaseClient.supabase.storage
                 .from('podcast-audios')
                 .upload(storagePath, fileData, {
@@ -545,8 +911,13 @@ async function uploadAudioFiles(files, channelConfig, supabaseClient, logger, se
                 });
 
             if (error) {
+                logger.error(`[Upload] ✗ Storage上传失败: ${error.message}`);
+                logger.error(`[Upload] Error code: ${error.statusCode || 'N/A'}`);
+                logger.error(`[Upload] Error详情: ${JSON.stringify(error, null, 2)}`);
                 throw new Error(`Storage上传失败: ${error.message}`);
             }
+
+            logger.info(`[Upload] ✓ Storage上传成功: ${data.path}`);
 
             // 获取public URL
             const { data: urlData } = supabaseClient.supabase.storage
@@ -556,6 +927,33 @@ async function uploadAudioFiles(files, channelConfig, supabaseClient, logger, se
             const publicUrl = urlData.publicUrl;
             logger.info(`✓ 上传成功: ${storagePath} -> ${publicUrl}`);
 
+            // 🔍 验证上传结果
+            logger.info(`[Verify] 开始验证上传结果: ${arxiv_id}`);
+            sendEvent('progress', {
+                status: 'verifying_upload',
+                message: `正在验证上传 (${i + 1}/${files.length}): ${arxiv_id}`,
+                progress: 85 + Math.floor((i / files.length) * 10)
+            });
+
+            const verification = await verifyAudioUpload(arxiv_id, publicUrl, storagePath, supabaseClient, logger, skipDatabaseCheck);
+
+            if (!verification.success) {
+                // 验证失败 - 执行回滚
+                logger.error(`[Verify] ✗ 验证失败，执行回滚: ${arxiv_id}`);
+                logger.error(`[Verify] 失败原因: ${JSON.stringify(verification.checks, null, 2)}`);
+
+                sendEvent('progress', {
+                    status: 'upload_verification_failed',
+                    message: `验证失败，正在回滚: ${arxiv_id}`,
+                    progress: 85 + Math.floor((i / files.length) * 10)
+                });
+
+                const rollbackResult = await rollbackAudioUpload(storagePath, arxiv_id, supabaseClient, logger);
+
+                throw new Error(`Upload verification failed for ${arxiv_id}: ${JSON.stringify(verification.checks)}`);
+            }
+
+            logger.info(`[Verify] ✅ 验证通过，上传确认成功: ${arxiv_id}`);
             results.urls.push({ arxiv_id, url: publicUrl });
             results.success++;
 
@@ -593,6 +991,14 @@ async function uploadAudioFiles(files, channelConfig, supabaseClient, logger, se
     }
 
     logger.info(`音频上传完成: 成功 ${results.success}/${files.length}, 失败 ${results.failed}`);
+    logger.info('========== uploadAudioFiles 完成 ==========');
+    if (results.errors.length > 0) {
+        logger.error(`[Errors] 上传失败的文件: ${JSON.stringify(results.errors, null, 2)}`);
+    }
+    if (results.urls.length > 0) {
+        logger.info(`[URLs] 成功上传的URL数量: ${results.urls.length}`);
+    }
+
     return results;
 }
 
@@ -605,8 +1011,14 @@ async function uploadAudioFiles(files, channelConfig, supabaseClient, logger, se
  * @returns {Promise<Object>} 返回音频文件信息和上传结果
  */
 async function runPodcastTTS(scriptPath, channelId, logger, sendEvent) {
+    logger.info('========== runPodcastTTS 开始 ==========');
+    logger.info(`[TTS] scriptPath: ${scriptPath}`);
+    logger.info(`[TTS] channelId: ${channelId}`);
+    logger.info(`[TTS] SKIP_TTS: ${process.env.SKIP_TTS}`);
+    logger.info(`[TTS] Script file exists: ${fs.existsSync(scriptPath)}`);
+
     if (process.env.SKIP_TTS === '1') {
-        logger.info('跳过音频生成（SKIP_TTS=1）');
+        logger.info('[TTS] 跳过音频生成（SKIP_TTS=1）');
         sendEvent('progress', {
             status: 'tts_skipped',
             message: '已根据配置跳过音频生成',
@@ -618,6 +1030,7 @@ async function runPodcastTTS(scriptPath, channelId, logger, sendEvent) {
     try {
         // 获取频道存储配置
         const supabaseClient = new SupabaseClient();
+        logger.info('[TTS] 正在获取频道配置...');
         sendEvent('progress', {
             status: 'getting_channel_config',
             message: '正在获取频道配置...',
@@ -625,7 +1038,7 @@ async function runPodcastTTS(scriptPath, channelId, logger, sendEvent) {
         });
 
         const channelConfig = await supabaseClient.getChannelStorageConfig(channelId, logger);
-        logger.info(`频道配置: ${JSON.stringify(channelConfig)}`);
+        logger.info(`[TTS] 频道配置获取成功: ${JSON.stringify(channelConfig, null, 2)}`);
 
         // 准备Python命令参数
         const pythonExecutable = process.env.PODCAST_PYTHON || process.env.PYTHON || 'python';
@@ -646,7 +1059,12 @@ async function runPodcastTTS(scriptPath, channelId, logger, sendEvent) {
             channelId
         ];
 
-        logger.info(`启动播客音频生成: ${pythonExecutable} ${args.join(' ')}`);
+        logger.info('[TTS] ========== Python进程启动 ==========');
+        logger.info(`[TTS] Python: ${pythonExecutable}`);
+        logger.info(`[TTS] Script: ${ttsScriptPath}`);
+        logger.info(`[TTS] 完整命令: ${pythonExecutable} ${args.join(' ')}`);
+        logger.info(`[TTS] 工作目录: ${projectRoot}`);
+
         sendEvent('progress', {
             status: 'tts_started',
             message: '正在生成播客音频...',
@@ -820,6 +1238,7 @@ async function runPodcastTTS(scriptPath, channelId, logger, sendEvent) {
                         logger.warning(`读取结果文件失败: ${e.message}`);
                     }
 
+                    logger.info('[TTS] ========== Python进程正常结束 ==========');
                     resolve({
                         audioFiles,
                         uploadResults,
@@ -827,14 +1246,18 @@ async function runPodcastTTS(scriptPath, channelId, logger, sendEvent) {
                     });
                 } else {
                     const error = new Error(`音频生成进程退出码 ${code}`);
-                    logger.error(error.message);
+                    logger.error('[TTS] ========== Python进程异常退出 ==========');
+                    logger.error(`[TTS] 退出码: ${code}`);
                     reject(error);
                 }
             });
         });
 
     } catch (error) {
-        logger.error(`TTS执行失败: ${error.message}`);
+        logger.error('[TTS] ========== TTS执行失败 ==========');
+        logger.error(`[TTS] 错误类型: ${error.constructor.name}`);
+        logger.error(`[TTS] 错误消息: ${error.message}`);
+        logger.error(`[TTS] 错误堆栈:\n${error.stack}`);
         throw error;
     }
 }
@@ -859,11 +1282,14 @@ app.get('/', (req, res) => {
 
 // 上传并执行 workflow (SSE)
 app.post('/api/execute', upload.single('file'), async (req, res) => {
-    const logger = new Logger();
+    // 创建带有workflowRunId的Logger，确保日志被保存到文件
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const workflowRunId = `exec_${timestamp}`;
+    const logger = new Logger(workflowRunId);
+
     const supabaseClient = new SupabaseClient();
     const excelParser = new ExcelParser();
     let tempFilePath = null;
-    let workflowRunId = null;
     let excelData = null;
     let supabaseResults = null;
     let enrichedData = null;
@@ -929,6 +1355,7 @@ app.post('/api/execute', upload.single('file'), async (req, res) => {
         const fileName = req.file.originalname;
         const fileSize = (req.file.size / 1024).toFixed(2);
 
+        logger.info(`========== 开始执行 (Run ID: ${workflowRunId}) ==========`);
         logger.info(`收到文件: ${fileName} (${fileSize} KB)`);
         logger.info(`使用 Workflow: ${workflowConfig.name} (${workflowType})`);
 
@@ -1292,6 +1719,94 @@ app.get('/api/logs', async (req, res) => {
         res.json(logs);
     } else {
         res.status(500).json({ error: '查询日志失败' });
+    }
+});
+
+// 🆕 查询最近的Dify workflow执行日志
+app.get('/api/dify/logs/recent', async (req, res) => {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const logger = new Logger(`dify_logs_${timestamp}`);
+    const workflowType = req.query.workflow || 'PODCAST';
+    const limit = parseInt(req.query.limit) || 5;
+
+    try {
+        logger.info(`查询最近的Dify执行日志: workflow=${workflowType}, limit=${limit}`);
+
+        const difyClient = new DifyClient(logger, workflowType);
+        const logs = await difyClient.getWorkflowLogs(1, limit, null);
+
+        if (logs) {
+            logger.info(`成功获取 ${logs.data?.length || 0} 条日志`);
+            res.json({
+                success: true,
+                logs: logs.data || [],
+                total: logs.total || 0,
+                page: logs.page || 1,
+                limit: logs.limit || limit
+            });
+        } else {
+            logger.warning('Dify日志查询返回null');
+            res.status(404).json({
+                success: false,
+                message: 'Dify日志查询失败'
+            });
+        }
+
+    } catch (error) {
+        logger.error(`Dify日志查询异常: ${error.message}`);
+        logger.error(`错误堆栈: ${error.stack}`);
+        res.status(500).json({
+            success: false,
+            message: error.message,
+            error: error.stack
+        });
+    }
+});
+
+// 🆕 查询特定执行ID的Dify日志详情
+app.get('/api/dify/logs/:workflow_run_id', async (req, res) => {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const logger = new Logger(`dify_log_detail_${timestamp}`);
+    const workflowRunId = req.params.workflow_run_id;
+
+    try {
+        logger.info(`查询Dify执行日志详情: ${workflowRunId}`);
+
+        // 注意: Dify API可能需要额外的端点来获取单个执行的详细日志
+        // 这里使用logs API并过滤结果
+        const difyClient = new DifyClient(logger, 'PODCAST');
+        const logs = await difyClient.getWorkflowLogs(1, 50, null);
+
+        if (logs && logs.data) {
+            const targetLog = logs.data.find(log => log.workflow_run_id === workflowRunId);
+            if (targetLog) {
+                logger.info(`找到目标日志: ${workflowRunId}`);
+                res.json({
+                    success: true,
+                    log: targetLog
+                });
+            } else {
+                logger.warning(`未找到日志: ${workflowRunId}`);
+                res.status(404).json({
+                    success: false,
+                    message: '未找到指定的执行日志'
+                });
+            }
+        } else {
+            res.status(404).json({
+                success: false,
+                message: 'Dify日志查询失败'
+            });
+        }
+
+    } catch (error) {
+        logger.error(`Dify日志详情查询异常: ${error.message}`);
+        logger.error(`错误堆栈: ${error.stack}`);
+        res.status(500).json({
+            success: false,
+            message: error.message,
+            error: error.stack
+        });
     }
 });
 
