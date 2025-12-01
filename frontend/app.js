@@ -16,6 +16,7 @@ const clearLogsBtn = document.getElementById('clearLogsBtn');
 const downloadBtn = document.getElementById('downloadBtn');
 const resetBtn = document.getElementById('resetBtn');
 const retryBtn = document.getElementById('retryBtn');
+const openFolderBtn = document.getElementById('openFolderBtn');
 
 // 设置相关元素
 const settingsBtn = document.getElementById('settingsBtn');
@@ -30,6 +31,21 @@ const customPathInput = document.getElementById('customPathInput');
 const saveSettingsBtn = document.getElementById('saveSettingsBtn');
 const cancelBtn = document.getElementById('cancelBtn');
 
+// 新增：输入模式相关元素
+const modeTabs = document.querySelectorAll('.mode-tab');
+const excelSection = document.getElementById('excelSection');
+const urlSection = document.getElementById('urlSection');
+const articleSection = document.getElementById('articleSection');
+const modeDescription = document.getElementById('modeDescription');
+
+const urlInput = document.getElementById('urlInput');
+const urlCount = document.getElementById('urlCount');
+const submitUrlBtn = document.getElementById('submitUrlBtn');
+
+const articleInput = document.getElementById('articleInput');
+const charCount = document.getElementById('charCount');
+const submitArticleBtn = document.getElementById('submitArticleBtn');
+
 // 全局变量
 let selectedFile = null;
 let resultFilename = null;
@@ -37,6 +53,8 @@ let currentWorkflow = 'PODCAST'; // 默认 workflow
 let currentProcessingMode = 'batch'; // 默认批量模式
 let availableWorkflows = [];
 let abortController = null; // 用于取消请求
+let currentInputMode = 'excel'; // 当前输入模式: 'excel' | 'url' | 'article'
+let outputDirectory = null; // 输出目录路径
 
 // 标题映射
 const WORKFLOW_TITLES = {
@@ -206,6 +224,99 @@ saveSettingsBtn.addEventListener('click', async () => {
     settingsModal.classList.add('hidden');
 });
 
+// ==================== 输入模式切换 ====================
+
+const MODE_DESCRIPTIONS = {
+    excel: '拖拽Excel文件生成播客脚本（完整流程：脚本 + 音频 + 数据库）',
+    url: '输入文章URL生成播客脚本（生成脚本 + 音频，暂不上传数据库）',
+    article: '直接粘贴文章内容生成播客脚本（生成脚本 + 音频，暂不上传数据库）'
+};
+
+// Tab点击事件
+modeTabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+        const mode = tab.dataset.mode;
+        switchInputMode(mode);
+    });
+});
+
+function switchInputMode(mode) {
+    currentInputMode = mode;
+
+    // 更新Tab样式
+    modeTabs.forEach(tab => {
+        if (tab.dataset.mode === mode) {
+            tab.classList.add('active');
+        } else {
+            tab.classList.remove('active');
+        }
+    });
+
+    // 切换显示区域
+    excelSection.classList.toggle('hidden', mode !== 'excel');
+    urlSection.classList.toggle('hidden', mode !== 'url');
+    articleSection.classList.toggle('hidden', mode !== 'article');
+
+    // 更新描述
+    modeDescription.textContent = MODE_DESCRIPTIONS[mode];
+
+    // 重置界面
+    resetUI();
+}
+
+// URL输入统计
+urlInput.addEventListener('input', () => {
+    const urls = parseUrls(urlInput.value);
+    urlCount.textContent = `${urls.length} 个URL`;
+    submitUrlBtn.disabled = urls.length === 0;
+});
+
+// 文本输入统计
+articleInput.addEventListener('input', () => {
+    const length = articleInput.value.length;
+    const maxLength = 100000;
+    charCount.textContent = `${length.toLocaleString()} / ${maxLength.toLocaleString()} 字符`;
+
+    if (length > maxLength) {
+        charCount.style.color = 'var(--error-color)';
+        submitArticleBtn.disabled = true;
+    } else {
+        charCount.style.color = 'var(--text-secondary)';
+        submitArticleBtn.disabled = length === 0;
+    }
+});
+
+// 解析URL列表
+function parseUrls(text) {
+    return text.split('\n')
+        .map(line => line.trim())
+        .filter(line => line && (line.startsWith('http://') || line.startsWith('https://')));
+}
+
+// URL提交按钮
+submitUrlBtn.addEventListener('click', () => {
+    const urls = parseUrls(urlInput.value);
+    if (urls.length === 0) {
+        showError('请输入至少一个有效的URL');
+        return;
+    }
+    executeWorkflowWithUrls(urls);
+});
+
+// 文本提交按钮
+submitArticleBtn.addEventListener('click', () => {
+    const article = articleInput.value.trim();
+    if (!article) {
+        showError('请输入文章内容');
+        return;
+    }
+    if (article.length > 100000) {
+        showError('文章内容超过100,000字符限制');
+        return;
+    }
+    executeWorkflowWithArticle(article);
+});
+
 // ==================== 文件上传处理 ====================
 
 // 点击上传区域触发文件选择
@@ -333,6 +444,158 @@ async function executeWorkflow() {
 
                 try {
                     // 解析 SSE 事件
+                    const lines = eventStr.split('\n');
+                    let eventType = 'message';
+                    let eventData = '';
+
+                    for (const line of lines) {
+                        if (line.startsWith('event: ')) {
+                            eventType = line.substring(7).trim();
+                        } else if (line.startsWith('data: ')) {
+                            eventData = line.substring(6).trim();
+                        }
+                    }
+
+                    if (eventData) {
+                        const data = JSON.parse(eventData);
+                        handleSSEEvent(eventType, data);
+                    }
+                } catch (e) {
+                    console.error('解析事件失败:', e, eventStr);
+                }
+            }
+        }
+
+    } catch (error) {
+        if (error.name === 'AbortError') {
+            addLog('⚠️ 用户取消执行', 'error');
+            showError('执行已取消');
+        } else {
+            console.error('执行失败:', error);
+            showError(`执行失败: ${error.message}`);
+        }
+    } finally {
+        abortController = null;
+    }
+}
+
+// URL模式执行
+async function executeWorkflowWithUrls(urls) {
+    resetUI();
+    progressSection.classList.remove('hidden');
+    abortController = new AbortController();
+
+    const formData = new FormData();
+    formData.append('inputType', 'url');
+    formData.append('urls', urls.join('\n'));
+    formData.append('workflow', currentWorkflow);
+    formData.append('channelId', channelSelect.value);
+    formData.append('processingMode', currentProcessingMode);
+
+    try {
+        const response = await fetch('/api/execute', {
+            method: 'POST',
+            body: formData,
+            signal: abortController.signal
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        // 处理SSE流
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const events = buffer.split('\n\n');
+            buffer = events.pop();
+
+            for (const eventStr of events) {
+                if (!eventStr.trim()) continue;
+
+                try {
+                    const lines = eventStr.split('\n');
+                    let eventType = 'message';
+                    let eventData = '';
+
+                    for (const line of lines) {
+                        if (line.startsWith('event: ')) {
+                            eventType = line.substring(7).trim();
+                        } else if (line.startsWith('data: ')) {
+                            eventData = line.substring(6).trim();
+                        }
+                    }
+
+                    if (eventData) {
+                        const data = JSON.parse(eventData);
+                        handleSSEEvent(eventType, data);
+                    }
+                } catch (e) {
+                    console.error('解析事件失败:', e, eventStr);
+                }
+            }
+        }
+
+    } catch (error) {
+        if (error.name === 'AbortError') {
+            addLog('⚠️ 用户取消执行', 'error');
+            showError('执行已取消');
+        } else {
+            console.error('执行失败:', error);
+            showError(`执行失败: ${error.message}`);
+        }
+    } finally {
+        abortController = null;
+    }
+}
+
+// 文本模式执行
+async function executeWorkflowWithArticle(article) {
+    resetUI();
+    progressSection.classList.remove('hidden');
+    abortController = new AbortController();
+
+    const formData = new FormData();
+    formData.append('inputType', 'article');
+    formData.append('article', article);
+    formData.append('workflow', currentWorkflow);
+    formData.append('channelId', channelSelect.value);
+    formData.append('processingMode', currentProcessingMode);
+
+    try {
+        const response = await fetch('/api/execute', {
+            method: 'POST',
+            body: formData,
+            signal: abortController.signal
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        // 处理SSE流
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const events = buffer.split('\n\n');
+            buffer = events.pop();
+
+            for (const eventStr of events) {
+                if (!eventStr.trim()) continue;
+
+                try {
                     const lines = eventStr.split('\n');
                     let eventType = 'message';
                     let eventData = '';
@@ -505,9 +768,10 @@ function handleProgress(data) {
 
 // 处理成功
 function handleSuccess(data) {
-    const { result_file, processing_stats, supabase_results } = data;
+    const { result_file, processing_stats, supabase_results, skip_supabase, output_dir } = data;
 
     resultFilename = result_file;
+    outputDirectory = output_dir; // 保存输出目录
 
     // 显示处理统计
     if (processing_stats) {
@@ -519,8 +783,12 @@ function handleSuccess(data) {
         }
     }
 
-    // 如果有Supabase结果，显示相关信息
-    if (supabase_results) {
+    // 如果跳过Supabase上传（URL/文本模式）
+    if (skip_supabase) {
+        addLog('ℹ️ 本次执行未上传到数据库（URL/文本模式）', 'info');
+        document.getElementById('supabaseResultRow').style.display = 'none';
+    } else if (supabase_results) {
+        // 如果有Supabase结果，显示相关信息
         const { success, failed, errors, skipped } = supabase_results;
 
         // 根据不同情况显示不同的提示信息
@@ -668,6 +936,34 @@ downloadBtn.addEventListener('click', () => {
     if (resultFilename) {
         window.location.href = `/api/download/${resultFilename}`;
         addLog(`📥 开始下载: ${resultFilename}`, 'info');
+    }
+});
+
+// 打开文件夹
+openFolderBtn.addEventListener('click', async () => {
+    if (!outputDirectory) {
+        showToast('无法获取输出目录', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/open-folder', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: outputDirectory })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            showToast('文件夹已打开', 'success');
+            addLog(`📂 打开文件夹: ${outputDirectory}`, 'info');
+        } else {
+            showToast('打开文件夹失败', 'error');
+        }
+    } catch (error) {
+        console.error('打开文件夹失败:', error);
+        showToast('打开文件夹失败', 'error');
     }
 });
 

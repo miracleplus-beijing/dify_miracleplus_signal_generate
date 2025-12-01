@@ -40,6 +40,10 @@ class Config {
         this.DIFY_SINGLE_INPUT_VARIABLE = process.env.DIFY_SINGLE_INPUT_VARIABLE || 'arxiv_url';
         this.DIFY_BATCH_OUTPUT_VARIABLE = process.env.DIFY_BATCH_OUTPUT_VARIABLE || 'results'; // Dify返回的数组变量名
 
+        // Dify URL/文本输入变量配置
+        this.DIFY_URL_INPUT_VARIABLE = process.env.DIFY_URL_INPUT_VARIABLE || 'url';
+        this.DIFY_ARTICLE_INPUT_VARIABLE = process.env.DIFY_ARTICLE_INPUT_VARIABLE || 'article';
+
         // 单条模式重试配置
         this.SEQUENTIAL_MODE_RETRY_ATTEMPTS = parseInt(process.env.SEQUENTIAL_RETRY_ATTEMPTS || '3');
         this.SEQUENTIAL_MODE_RETRY_DELAY_MS = parseInt(process.env.SEQUENTIAL_RETRY_DELAY_MS || '5000');

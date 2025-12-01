@@ -250,6 +250,76 @@ class DifyClient {
             throw error;
         }
     }
+
+    /**
+     * URL模式：发送单个URL到Dify
+     * @param {string} url - 单个URL
+     * @returns {Promise<object>} - 返回流式响应
+     */
+    async runWorkflowWithUrl(url) {
+        const apiUrl = `${this.baseUrl}/workflows/run`;
+
+        const payload = {
+            inputs: {
+                [config.DIFY_URL_INPUT_VARIABLE]: url
+            },
+            response_mode: 'streaming',
+            user: this.userId
+        };
+
+        this.logger.info(`[URL] 单个执行Workflow: ${url}`);
+
+        try {
+            const response = await axios.post(apiUrl, payload, {
+                headers: {
+                    ...this.headers,
+                    'Content-Type': 'application/json'
+                },
+                responseType: 'stream',
+                timeout: 600000 // 10分钟超时
+            });
+
+            return response;
+        } catch (error) {
+            this.logger.error(`[URL] Workflow执行失败: ${error.message}`);
+            throw error;
+        }
+    }
+
+    /**
+     * 文本模式：发送文章内容到Dify
+     * @param {string} article - 文章文本内容
+     * @returns {Promise<object>} - 返回流式响应
+     */
+    async runWorkflowWithArticle(article) {
+        const apiUrl = `${this.baseUrl}/workflows/run`;
+
+        const payload = {
+            inputs: {
+                [config.DIFY_ARTICLE_INPUT_VARIABLE]: article
+            },
+            response_mode: 'streaming',
+            user: this.userId
+        };
+
+        this.logger.info(`[Article] 执行Workflow，文本长度: ${article.length} 字符`);
+
+        try {
+            const response = await axios.post(apiUrl, payload, {
+                headers: {
+                    ...this.headers,
+                    'Content-Type': 'application/json'
+                },
+                responseType: 'stream',
+                timeout: 600000 // 10分钟超时
+            });
+
+            return response;
+        } catch (error) {
+            this.logger.error(`[Article] Workflow执行失败: ${error.message}`);
+            throw error;
+        }
+    }
 }
 
 module.exports = DifyClient;

@@ -11,6 +11,7 @@ const Logger = require('./logger');
 const SupabaseClient = require('./supabaseClient');
 const ExcelParser = require('./excelParser');
 const ArxivEnricher = require('./arxivEnricher');
+const { parseMultilineUrls, generateUrlHash, generateTextId, validateTextLength } = require('./utils');
 
 const app = express();
 const projectRoot = path.join(__dirname, '..');
@@ -224,6 +225,176 @@ async function processSingleArxiv(arxivUrl, arxivId, metadata, difyClient, logge
             podcast_title: '',
             podcast_script: '',
             metadata: metadata,
+            error: error.message
+        };
+    }
+}
+
+/**
+ * 处理单个URL（URL模式）
+ */
+async function processSingleUrl(url, urlId, difyClient, logger) {
+    try {
+        logger.info(`[URL] 开始处理: ${url}`);
+
+        const response = await difyClient.runWorkflowWithUrl(url);
+
+        // 解析响应
+        let buffer = '';
+        let finalResult = null;
+
+        return new Promise((resolve, reject) => {
+            response.data.on('data', (chunk) => {
+                buffer += chunk.toString();
+
+                const events = buffer.split('\n\n');
+                buffer = events.pop();
+
+                for (const eventStr of events) {
+                    if (!eventStr.trim()) continue;
+
+                    try {
+                        const lines = eventStr.split('\n');
+                        let eventData = '';
+
+                        for (const line of lines) {
+                            if (line.startsWith('data: ')) {
+                                eventData = line.substring(6).trim();
+                            }
+                        }
+
+                        if (eventData) {
+                            const data = JSON.parse(eventData);
+                            logger.info(`[URL] 收到事件: ${data.event}`);
+
+                            if (data.event === 'workflow_finished' && data.data?.status === 'succeeded') {
+                                const outputs = data.data.outputs || {};
+                                finalResult = {
+                                    podcast_title: outputs.podcast_title || '',
+                                    podcast_script: outputs.podcast_script || ''
+                                };
+                            }
+                        }
+                    } catch (e) {
+                        logger.error(`[URL] 解析响应失败: ${e.message}`);
+                    }
+                }
+            });
+
+            response.data.on('end', () => {
+                if (finalResult && (finalResult.podcast_title || finalResult.podcast_script)) {
+                    logger.info(`[URL] ✓ 完成: ${urlId}`);
+                    resolve({
+                        success: true,
+                        url_id: urlId,
+                        source_url: url,
+                        podcast_title: finalResult.podcast_title,
+                        podcast_script: finalResult.podcast_script,
+                        error: null
+                    });
+                } else {
+                    logger.error(`[URL] ✗ 无效结果: ${urlId}`);
+                    reject(new Error(`未获取到有效结果: ${urlId}`));
+                }
+            });
+
+            response.data.on('error', (error) => {
+                reject(error);
+            });
+        });
+
+    } catch (error) {
+        logger.error(`[URL] ✗ 失败: ${urlId} - ${error.message}`);
+        return {
+            success: false,
+            url_id: urlId,
+            source_url: url,
+            podcast_title: '',
+            podcast_script: '',
+            error: error.message
+        };
+    }
+}
+
+/**
+ * 处理文本内容（文本模式）
+ */
+async function processSingleArticle(article, textId, difyClient, logger) {
+    try {
+        logger.info(`[Article] 开始处理，ID: ${textId}`);
+
+        const response = await difyClient.runWorkflowWithArticle(article);
+
+        // 解析响应
+        let buffer = '';
+        let finalResult = null;
+
+        return new Promise((resolve, reject) => {
+            response.data.on('data', (chunk) => {
+                buffer += chunk.toString();
+
+                const events = buffer.split('\n\n');
+                buffer = events.pop();
+
+                for (const eventStr of events) {
+                    if (!eventStr.trim()) continue;
+
+                    try {
+                        const lines = eventStr.split('\n');
+                        let eventData = '';
+
+                        for (const line of lines) {
+                            if (line.startsWith('data: ')) {
+                                eventData = line.substring(6).trim();
+                            }
+                        }
+
+                        if (eventData) {
+                            const data = JSON.parse(eventData);
+                            logger.info(`[Article] 收到事件: ${data.event}`);
+
+                            if (data.event === 'workflow_finished' && data.data?.status === 'succeeded') {
+                                const outputs = data.data.outputs || {};
+                                finalResult = {
+                                    podcast_title: outputs.podcast_title || '',
+                                    podcast_script: outputs.podcast_script || ''
+                                };
+                            }
+                        }
+                    } catch (e) {
+                        logger.error(`[Article] 解析响应失败: ${e.message}`);
+                    }
+                }
+            });
+
+            response.data.on('end', () => {
+                if (finalResult && (finalResult.podcast_title || finalResult.podcast_script)) {
+                    logger.info(`[Article] ✓ 完成: ${textId}`);
+                    resolve({
+                        success: true,
+                        text_id: textId,
+                        podcast_title: finalResult.podcast_title,
+                        podcast_script: finalResult.podcast_script,
+                        error: null
+                    });
+                } else {
+                    logger.error(`[Article] ✗ 无效结果: ${textId}`);
+                    reject(new Error(`未获取到有效结果: ${textId}`));
+                }
+            });
+
+            response.data.on('error', (error) => {
+                reject(error);
+            });
+        });
+
+    } catch (error) {
+        logger.error(`[Article] ✗ 失败: ${textId} - ${error.message}`);
+        return {
+            success: false,
+            text_id: textId,
+            podcast_title: '',
+            podcast_script: '',
             error: error.message
         };
     }
@@ -1324,23 +1495,14 @@ app.post('/api/execute', upload.single('file'), async (req, res) => {
             res.write(`data: ${JSON.stringify(data)}\n\n`);
         };
 
-        // 1. 验证文件
-        if (!req.file) {
-            sendEvent('error', { message: '未接收到文件' });
-            res.end();
-            return;
-        }
-
-        if (!req.file.originalname.endsWith('.xlsx')) {
-            sendEvent('error', { message: '只支持 .xlsx 格式文件' });
-            res.end();
-            return;
-        }
+        // 获取输入类型
+        const inputType = req.body.inputType || 'excel'; // 'excel' | 'url' | 'article'
+        logger.info(`输入类型: ${inputType}`);
 
         // 获取 workflow 类型和频道ID（从请求体中）
         const workflowType = req.body.workflow || 'PODCAST';
         const channelId = req.body.channelId || '355ed9b9-58d6-4716-a542-cadc13ae8ef4'; // 默认使用论文前沿日报
-        const processingMode = req.body.processingMode || 'batch'; // 🆕 接收处理模式
+        const processingMode = req.body.processingMode || 'batch'; // 接收处理模式
         const workflowConfig = config.getWorkflowConfig(workflowType);
 
         if (!workflowConfig) {
@@ -1350,6 +1512,21 @@ app.post('/api/execute', upload.single('file'), async (req, res) => {
         }
 
         logger.info(`使用处理模式: ${processingMode}`);
+
+        // ========== Excel输入模式（保持原有逻辑） ==========
+        if (inputType === 'excel') {
+            // 1. 验证文件
+            if (!req.file) {
+                sendEvent('error', { message: '未接收到文件' });
+                res.end();
+                return;
+            }
+
+            if (!req.file.originalname.endsWith('.xlsx')) {
+                sendEvent('error', { message: '只支持 .xlsx 格式文件' });
+                res.end();
+                return;
+            }
 
         tempFilePath = req.file.path;
         const fileName = req.file.originalname;
@@ -1650,6 +1827,234 @@ app.post('/api/execute', upload.single('file'), async (req, res) => {
 
         res.end();
 
+        // ========== URL输入模式处理 ==========
+        } else if (inputType === 'url') {
+            const urlsText = req.body.urls;
+            if (!urlsText) {
+                sendEvent('error', { message: '未接收到URL数据' });
+                res.end();
+                return;
+            }
+
+            const urlList = parseMultilineUrls(urlsText);
+            if (urlList.length === 0) {
+                sendEvent('error', { message: '未找到有效的URL' });
+                res.end();
+                return;
+            }
+
+            logger.info(`URL模式: 收到 ${urlList.length} 个URL`);
+
+            sendEvent('progress', {
+                status: 'processing_urls',
+                message: `开始处理 ${urlList.length} 个URL...`,
+                progress: 10
+            });
+
+            // 串行处理URL列表
+            const difyClient = new DifyClient(logger, workflowType);
+            const urlResults = [];
+
+            for (let i = 0; i < urlList.length; i++) {
+                const url = urlList[i];
+                const urlId = generateUrlHash(url);
+                const progressPercent = 10 + Math.floor((i / urlList.length) * 50); // 10-60%
+
+                sendEvent('progress', {
+                    status: 'processing_url',
+                    message: `正在处理URL [${i + 1}/${urlList.length}]`,
+                    progress: progressPercent
+                });
+
+                const result = await processSingleUrl(url, urlId, difyClient, logger);
+                urlResults.push(result);
+            }
+
+            const successCount = urlResults.filter(r => r.success).length;
+            const failedCount = urlResults.filter(r => !r.success).length;
+
+            logger.info(`URL处理完成: 成功 ${successCount}, 失败 ${failedCount}`);
+
+            if (successCount === 0) {
+                sendEvent('error', { message: '所有URL处理失败' });
+                res.end();
+                return;
+            }
+
+            // 保存脚本
+            sendEvent('progress', {
+                status: 'saving_scripts',
+                message: '正在保存播客脚本...',
+                progress: 60
+            });
+
+            const formattedResults = urlResults
+                .filter(r => r.success)
+                .map(r => ({
+                    title: r.podcast_title,
+                    script: r.podcast_script,
+                    url_id: r.url_id,
+                    source_url: r.source_url
+                }));
+
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+            const resultFilename = `URL播客稿-${timestamp}.json`;
+            const resultPath = path.join(config.getOutputDir(), resultFilename);
+
+            fs.writeFileSync(resultPath, JSON.stringify(formattedResults, null, 2), 'utf8');
+            logger.info(`播客脚本已保存: ${resultPath}`);
+
+            // 保存映射文件（用于TTS）
+            const urlMapping = {};
+            const titleMapping = {};
+
+            urlResults.forEach((result, idx) => {
+                if (result.success) {
+                    urlMapping[`url_${idx}`] = result.url_id;
+                    titleMapping[result.url_id] = result.podcast_title;
+                }
+            });
+
+            const mappingPath = path.join(config.getOutputDir(), 'url_mapping.json');
+            fs.writeFileSync(mappingPath, JSON.stringify(urlMapping, null, 2), 'utf8');
+
+            const titleMappingPath = path.join(config.getOutputDir(), 'podcast_titles.json');
+            fs.writeFileSync(titleMappingPath, JSON.stringify(titleMapping, null, 2), 'utf8');
+
+            // 🎙️ 生成音频（与Excel模式相同）
+            sendEvent('progress', {
+                status: 'tts_start',
+                message: '开始生成音频...',
+                progress: 65
+            });
+
+            let audioFiles = [];
+            try {
+                const ttsResult = await runPodcastTTS(resultPath, channelId, logger, sendEvent);
+                audioFiles = Array.isArray(ttsResult?.audioFiles) ? ttsResult.audioFiles : [];
+            } catch (ttsError) {
+                logger.error(`音频生成失败: ${ttsError.message}`);
+                // 不阻断流程，继续返回脚本
+            }
+
+            // ✅ 返回成功结果（不上传Supabase）
+            sendEvent('success', {
+                status: 'succeeded',
+                message: '执行成功!',
+                progress: 100,
+                result_file: resultFilename,
+                processing_stats: {
+                    total: urlList.length,
+                    success: successCount,
+                    failed: failedCount
+                },
+                audio_files: audioFiles,
+                output_dir: config.getOutputDir(),
+                skip_supabase: true // 标记跳过Supabase
+            });
+
+            res.end();
+
+        // ========== 文本输入模式处理 ==========
+        } else if (inputType === 'article') {
+            const article = req.body.article;
+            if (!article || article.trim().length === 0) {
+                sendEvent('error', { message: '未接收到文章内容' });
+                res.end();
+                return;
+            }
+
+            const validation = validateTextLength(article, 100000);
+            if (!validation.valid) {
+                sendEvent('error', { message: validation.error });
+                res.end();
+                return;
+            }
+
+            logger.info(`文本模式: 文本长度 ${validation.length} 字符`);
+
+            sendEvent('progress', {
+                status: 'processing_article',
+                message: '正在处理文本内容...',
+                progress: 10
+            });
+
+            const textId = generateTextId();
+            const difyClient = new DifyClient(logger, workflowType);
+
+            const result = await processSingleArticle(article, textId, difyClient, logger);
+
+            if (!result.success) {
+                sendEvent('error', { message: `文本处理失败: ${result.error}` });
+                res.end();
+                return;
+            }
+
+            logger.info(`文本处理完成: ${textId}`);
+
+            // 保存脚本
+            sendEvent('progress', {
+                status: 'saving_scripts',
+                message: '正在保存播客脚本...',
+                progress: 60
+            });
+
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+            const resultFilename = `文本播客稿-${timestamp}.json`;
+            const resultPath = path.join(config.getOutputDir(), resultFilename);
+
+            const formattedResult = [{
+                title: result.podcast_title,
+                script: result.podcast_script,
+                text_id: result.text_id
+            }];
+
+            fs.writeFileSync(resultPath, JSON.stringify(formattedResult, null, 2), 'utf8');
+            logger.info(`播客脚本已保存: ${resultPath}`);
+
+            // 保存映射文件（用于TTS）
+            const titleMapping = {
+                [result.text_id]: result.podcast_title
+            };
+
+            const titleMappingPath = path.join(config.getOutputDir(), 'podcast_titles.json');
+            fs.writeFileSync(titleMappingPath, JSON.stringify(titleMapping, null, 2), 'utf8');
+
+            // 🎙️ 生成音频
+            sendEvent('progress', {
+                status: 'tts_start',
+                message: '开始生成音频...',
+                progress: 65
+            });
+
+            let audioFiles = [];
+            try {
+                const ttsResult = await runPodcastTTS(resultPath, channelId, logger, sendEvent);
+                audioFiles = Array.isArray(ttsResult?.audioFiles) ? ttsResult.audioFiles : [];
+            } catch (ttsError) {
+                logger.error(`音频生成失败: ${ttsError.message}`);
+            }
+
+            // ✅ 返回成功结果（不上传Supabase）
+            sendEvent('success', {
+                status: 'succeeded',
+                message: '执行成功!',
+                progress: 100,
+                result_file: resultFilename,
+                processing_stats: {
+                    total: 1,
+                    success: 1,
+                    failed: 0
+                },
+                audio_files: audioFiles,
+                output_dir: config.getOutputDir(),
+                skip_supabase: true
+            });
+
+            res.end();
+        }
+        // Excel模式的结束
+
     } catch (error) {
         logger.error(`系统异常: ${error.message}`);
         res.write(`event: error\ndata: ${JSON.stringify({ message: error.message })}\n\n`);
@@ -1691,6 +2096,35 @@ app.get('/api/settings', (req, res) => {
     res.json({
         customOutputDir: config.customOutputDir,
         defaultOutputDir: config.OUTPUT_BASE_DIR
+    });
+});
+
+// 打开文件夹
+app.post('/api/open-folder', express.json(), (req, res) => {
+    const { path: folderPath } = req.body;
+
+    if (!folderPath) {
+        return res.status(400).json({ error: '未提供文件夹路径' });
+    }
+
+    const { exec } = require('child_process');
+    let command;
+
+    // 根据操作系统选择命令
+    if (process.platform === 'win32') {
+        command = `explorer "${folderPath}"`;
+    } else if (process.platform === 'darwin') {
+        command = `open "${folderPath}"`;
+    } else {
+        command = `xdg-open "${folderPath}"`;
+    }
+
+    exec(command, (error) => {
+        if (error) {
+            console.error(`打开文件夹失败: ${error.message}`);
+            return res.status(500).json({ error: '打开文件夹失败' });
+        }
+        res.json({ success: true, message: '文件夹已打开' });
     });
 });
 

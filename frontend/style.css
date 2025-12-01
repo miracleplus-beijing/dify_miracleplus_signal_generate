@@ -624,3 +624,344 @@ footer a:hover {
     text-transform: uppercase;
     vertical-align: middle;
 }
+
+/* ====== 现代化美化补丁 ====== */
+
+/* 1. 全局字体与背景 */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    background: linear-gradient(135deg, #f0f2f5 0%, #eef2ff 100%); /* 细微的渐变背景 */
+}
+
+.container {
+    max-width: 800px; /*稍微收窄一点，更精致*/
+}
+
+/* 2. 卡片与容器升级 */
+section, .modal-content, .toast {
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.6);
+    box-shadow: 0 10px 30px -10px rgba(0,0,0,0.08);
+    border-radius: 16px;
+}
+
+/* 3. 标题美化 */
+header h1 {
+    background: linear-gradient(to right, #2563eb, #7c3aed);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    letter-spacing: -0.02em;
+}
+
+/* 4. 上传区域增强 */
+.drop-zone {
+    border: 2px dashed #e2e8f0;
+    border-radius: 16px;
+    transition: all 0.3s ease;
+    background: #ffffff;
+}
+.drop-zone:hover {
+    border-color: #6366f1;
+    transform: scale(1.01);
+    box-shadow: 0 20px 25px -5px rgba(99, 102, 241, 0.1);
+}
+.upload-icon {
+    color: #6366f1;
+    filter: drop-shadow(0 4px 6px rgba(99, 102, 241, 0.3));
+}
+
+/* 5. 按钮重绘 */
+.btn-primary {
+    background: linear-gradient(135deg, #2563eb 0%, #4f46e5 100%);
+    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+    border-radius: 10px;
+    font-weight: 500;
+    letter-spacing: 0.5px;
+}
+.btn-primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(37, 99, 235, 0.4);
+}
+
+/* 6. 深色日志终端 */
+.logs-container {
+    border: none;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+    border-radius: 12px;
+    overflow: hidden;
+}
+.logs-header {
+    background: #1e1e1e;
+    color: #fff;
+    border-bottom: 1px solid #333;
+    padding: 0.75rem 1.25rem;
+}
+.logs-content {
+    background: #1e1e1e; /* 深色背景 */
+    color: #a9b7c6;
+    font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+    font-size: 0.8rem;
+    padding: 1.25rem;
+}
+/* 日志条目颜色调整 */
+.log-entry.info { color: #61afef; } /* 蓝色 */
+.log-entry.success { color: #98c379; } /* 绿色 */
+.log-entry.error { color: #e06c75; } /* 红色 */
+.log-entry.warning { color: #e5c07b; } /* 黄色 */
+
+/* 7. 进度条动效 */
+.progress-bar {
+    background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+    position: relative;
+    overflow: hidden;
+}
+.progress-bar::after {
+    content: "";
+    position: absolute;
+    top: 0; left: 0; bottom: 0; right: 0;
+    background-image: linear-gradient(
+        -45deg, 
+        rgba(255, 255, 255, .2) 25%, 
+        transparent 25%, 
+        transparent 50%, 
+        rgba(255, 255, 255, .2) 50%, 
+        rgba(255, 255, 255, .2) 75%, 
+        transparent 75%, 
+        transparent
+    );
+    z-index: 1;
+    background-size: 50px 50px;
+    animation: move 2s linear infinite;
+}
+@keyframes move {
+    0% { background-position: 0 0; }
+    100% { background-position: 50px 50px; }
+}
+
+/* ====== 输入模式切换器样式 ====== */
+.input-mode-section {
+    background: var(--card-bg);
+    border-radius: 16px;
+    padding: 1.5rem 2rem;
+    box-shadow: var(--shadow);
+    margin-bottom: 2rem;
+    border: 1px solid rgba(255,255,255,0.6);
+}
+
+.mode-tabs {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.mode-tab {
+    flex: 1;
+    padding: 1rem 1.5rem;
+    background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+    border: 2px solid #e2e8f0;
+    border-radius: 12px;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    transition: all 0.3s ease;
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+}
+
+.mode-tab::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.5), transparent);
+    transition: left 0.5s;
+}
+
+.mode-tab:hover::before {
+    left: 100%;
+}
+
+.mode-tab:hover {
+    background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%);
+    border-color: var(--primary-color);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.1);
+}
+
+.mode-tab.active {
+    background: linear-gradient(135deg, #2563eb 0%, #4f46e5 100%);
+    color: white;
+    border-color: var(--primary-color);
+    box-shadow: 0 4px 16px rgba(37, 99, 235, 0.4);
+    transform: translateY(-2px);
+}
+
+.mode-description {
+    text-align: center;
+    padding: 0.75rem;
+    background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+    border-radius: 8px;
+    border-left: 4px solid var(--primary-color);
+}
+
+.mode-description p {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+    font-weight: 500;
+}
+
+/* ====== URL和文本输入区域 ====== */
+.input-container {
+    padding: 1.5rem;
+}
+
+.input-container label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 600;
+    margin-bottom: 0.75rem;
+    color: var(--text-primary);
+}
+
+.label-hint {
+    font-size: 0.85rem;
+    font-weight: 400;
+    color: var(--text-secondary);
+}
+
+.url-textarea,
+.article-textarea {
+    width: 100%;
+    padding: 1rem;
+    border: 2px solid var(--border-color);
+    border-radius: 12px;
+    font-size: 0.95rem;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    background: #fafafa;
+    transition: all 0.3s ease;
+    resize: vertical;
+    line-height: 1.6;
+}
+
+.url-textarea {
+    min-height: 180px;
+    max-height: 400px;
+}
+
+.article-textarea {
+    min-height: 300px;
+    max-height: 600px;
+}
+
+.url-textarea:focus,
+.article-textarea:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    background: white;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.input-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 1rem;
+    gap: 1rem;
+}
+
+.count-text {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    font-weight: 600;
+    padding: 0.5rem 1rem;
+    background: #f1f5f9;
+    border-radius: 8px;
+}
+
+.feature-note {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    margin-top: 1.5rem;
+    padding: 1rem;
+    background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+    border-radius: 10px;
+    border-left: 4px solid var(--warning-color);
+    font-size: 0.9rem;
+    color: #92400e;
+    font-weight: 500;
+    flex-wrap: wrap;
+}
+
+.note-icon {
+    font-size: 1.1rem;
+    font-weight: 700;
+}
+
+.note-icon:first-of-type {
+    color: var(--success-color);
+}
+
+.note-icon:last-of-type {
+    color: var(--error-color);
+}
+
+/* ====== 按钮禁用状态 ====== */
+button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none !important;
+}
+
+button:disabled:hover {
+    box-shadow: none !important;
+}
+
+/* ====== 打开文件夹按钮样式 ====== */
+#openFolderBtn {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+#openFolderBtn svg {
+    width: 20px;
+    height: 20px;
+}
+
+/* ====== 响应式调整 ====== */
+@media (max-width: 768px) {
+    .mode-tabs {
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+
+    .mode-tab {
+        padding: 0.75rem 1rem;
+        font-size: 0.9rem;
+    }
+
+    .input-footer {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .btn-primary {
+        width: 100%;
+        justify-content: center;
+    }
+
+    .feature-note {
+        gap: 0.5rem;
+        font-size: 0.85rem;
+    }
+}
