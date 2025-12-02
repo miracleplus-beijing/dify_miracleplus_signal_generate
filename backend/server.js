@@ -11,6 +11,7 @@ const Logger = require('./logger');
 const SupabaseClient = require('./supabaseClient');
 const ExcelParser = require('./excelParser');
 const ArxivEnricher = require('./arxivEnricher');
+const AudioService = require('./audioService');
 const { parseMultilineUrls, generateUrlHash, generateTextId, validateTextLength } = require('./utils');
 
 const app = express();
@@ -2240,6 +2241,90 @@ app.get('/api/dify/logs/:workflow_run_id', async (req, res) => {
             success: false,
             message: error.message,
             error: error.stack
+        });
+    }
+});
+
+// ==================== 播客音频相关 API ====================
+
+// 获取最新生成的播客列表
+app.get('/api/podcasts/latest', async (req, res) => {
+    try {
+        const podcasts = await AudioService.getLatestPodcasts();
+        res.json({
+            success: true,
+            count: podcasts.length,
+            podcasts
+        });
+    } catch (error) {
+        console.error('获取播客列表失败:', error);
+        res.status(500).json({
+            success: false,
+            message: '获取播客列表失败',
+            error: error.message
+        });
+    }
+});
+
+// 流式传输音频文件
+app.get('/api/audio/:filename', (req, res) => {
+    try {
+        const { filename } = req.params;
+
+        // 验证文件名格式（防止路径穿越攻击）
+        if (!/^[\w\.-]+\.mp3$/.test(filename)) {
+            return res.status(400).json({
+                success: false,
+                message: '无效的文件名'
+            });
+        }
+
+        const audioPath = AudioService.getAudioFilePath(filename);
+
+        if (!audioPath || !fs.existsSync(audioPath)) {
+            return res.status(404).json({
+                success: false,
+                message: '音频文件不存在'
+            });
+        }
+
+        // 获取文件大小
+        const stat = fs.statSync(audioPath);
+        const fileSize = stat.size;
+        const range = req.headers.range;
+
+        if (range) {
+            // 支持范围请求（用于拖动进度条）
+            const parts = range.replace(/bytes=/, '').split('-');
+            const start = parseInt(parts[0], 10);
+            const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+            const chunksize = (end - start) + 1;
+            const file = fs.createReadStream(audioPath, { start, end });
+
+            res.writeHead(206, {
+                'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+                'Accept-Ranges': 'bytes',
+                'Content-Length': chunksize,
+                'Content-Type': 'audio/mpeg'
+            });
+
+            file.pipe(res);
+        } else {
+            // 常规请求
+            res.writeHead(200, {
+                'Content-Length': fileSize,
+                'Content-Type': 'audio/mpeg',
+                'Accept-Ranges': 'bytes'
+            });
+
+            fs.createReadStream(audioPath).pipe(res);
+        }
+    } catch (error) {
+        console.error('传输音频文件失败:', error);
+        res.status(500).json({
+            success: false,
+            message: '传输音频文件失败',
+            error: error.message
         });
     }
 });
