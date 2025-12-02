@@ -18,6 +18,21 @@ const resetBtn = document.getElementById('resetBtn');
 const retryBtn = document.getElementById('retryBtn');
 const openFolderBtn = document.getElementById('openFolderBtn');
 
+// 播客相关元素
+const podcastList = document.getElementById('podcastList');
+const refreshPodcastsBtn = document.getElementById('refreshPodcastsBtn');
+
+// 播客稿查看模态框元素
+const scriptModal = document.getElementById('scriptModal');
+const scriptTitle = document.getElementById('scriptTitle');
+const scriptContent = document.getElementById('scriptContent');
+const scriptId = document.getElementById('scriptId');
+const scriptType = document.getElementById('scriptType');
+const copyScriptBtn = document.getElementById('copyScriptBtn');
+const playAudioBtn = document.getElementById('playAudioBtn');
+const closeScriptBtn = document.getElementById('closeScriptBtn');
+const closeScriptFooterBtn = document.getElementById('closeScriptFooterBtn');
+
 // 设置相关元素
 const settingsBtn = document.getElementById('settingsBtn');
 const settingsModal = document.getElementById('settingsModal');
@@ -67,6 +82,186 @@ const WORKFLOW_TITLES = {
         subtitle: '拖拽 Excel 文件生成每日内容'
     }
 };
+
+// ==================== 播客播放器类 ====================
+
+class PodcastPlayer {
+    constructor() {
+        this.currentAudio = null;
+        this.currentPodcast = null;
+        this.isPlaying = false;
+    }
+
+    /**
+     * 播放/暂停播客
+     * @param {Object} podcast - 播客对象
+     * @param {HTMLElement} playButton - 播放按钮元素
+     * @param {HTMLElement} progressBar - 进度条元素
+     * @param {HTMLElement} progressTime - 时间显示元素
+     */
+    async togglePlay(podcast, playButton, progressBar, progressTime) {
+        // 如果点击的是当前正在播放的播客
+        if (this.currentPodcast && this.currentPodcast.arxivId === podcast.arxivId) {
+            if (this.isPlaying) {
+                this.pause();
+                playButton.innerHTML = this.getPlayIcon();
+                playButton.classList.remove('playing');
+            } else {
+                await this.play();
+                playButton.innerHTML = this.getPauseIcon();
+                playButton.classList.add('playing');
+            }
+            return;
+        }
+
+        // 如果有其他播客在播放，先停止
+        if (this.currentAudio) {
+            this.stop();
+        }
+
+        // 开始播放新的播客
+        this.currentPodcast = podcast;
+        this.currentAudio = new Audio(podcast.audioUrl);
+
+        this.setupAudioEvents(playButton, progressBar, progressTime);
+        await this.play();
+
+        playButton.innerHTML = this.getPauseIcon();
+        playButton.classList.add('playing');
+    }
+
+    /**
+     * 播放音频
+     */
+    async play() {
+        if (!this.currentAudio) return;
+
+        try {
+            await this.currentAudio.play();
+            this.isPlaying = true;
+        } catch (error) {
+            console.error('播放失败:', error);
+            showToast('播放失败: ' + error.message, 'error');
+        }
+    }
+
+    /**
+     * 暂停音频
+     */
+    pause() {
+        if (!this.currentAudio) return;
+
+        this.currentAudio.pause();
+        this.isPlaying = false;
+    }
+
+    /**
+     * 停止音频并重置
+     */
+    stop() {
+        if (this.currentAudio) {
+            this.currentAudio.pause();
+            this.currentAudio = null;
+        }
+
+        this.currentPodcast = null;
+        this.isPlaying = false;
+
+        // 重置所有按钮状态
+        document.querySelectorAll('.podcast-btn.play-btn').forEach(btn => {
+            btn.innerHTML = this.getPlayIcon();
+            btn.classList.remove('playing');
+        });
+
+        // 重置所有进度条
+        document.querySelectorAll('.podcast-progress-bar').forEach(bar => {
+            bar.style.width = '0%';
+        });
+
+        // 重置所有时间显示
+        document.querySelectorAll('.podcast-progress-time').forEach(time => {
+            time.textContent = '0:00 / 0:00';
+        });
+
+        // 移除所有卡片的播放状态
+        document.querySelectorAll('.podcast-card').forEach(card => {
+            card.classList.remove('playing');
+        });
+    }
+
+    /**
+     * 设置音频事件监听器
+     */
+    setupAudioEvents(playButton, progressBar, progressTime) {
+        // 更新进度条
+        this.currentAudio.addEventListener('timeupdate', () => {
+            if (this.currentAudio.duration) {
+                const progress = (this.currentAudio.currentTime / this.currentAudio.duration) * 100;
+                progressBar.style.width = progress + '%';
+                progressTime.textContent = `${this.formatTime(this.currentAudio.currentTime)} / ${this.formatTime(this.currentAudio.duration)}`;
+            }
+        });
+
+        // 播放结束
+        this.currentAudio.addEventListener('ended', () => {
+            this.stop();
+        });
+
+        // 错误处理
+        this.currentAudio.addEventListener('error', (e) => {
+            console.error('音频播放错误:', e);
+            showToast('音频播放失败', 'error');
+            this.stop();
+        });
+    }
+
+    /**
+     * 格式化时间
+     * @param {number} seconds - 秒数
+     * @returns {string} 格式化后的时间
+     */
+    formatTime(seconds) {
+        const minutes = Math.floor(seconds / 60);
+        const secs = Math.floor(seconds % 60);
+        return `${minutes}:${secs.toString().padStart(2, '0')}`;
+    }
+
+    /**
+     * 获取播放图标
+     */
+    getPlayIcon() {
+        return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+        </svg>`;
+    }
+
+    /**
+     * 获取暂停图标
+     */
+    getPauseIcon() {
+        return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="6" y="4" width="4" height="16"></rect>
+            <rect x="14" y="4" width="4" height="16"></rect>
+        </svg>`;
+    }
+
+    /**
+     * 下载播客
+     * @param {Object} podcast - 播客对象
+     */
+    download(podcast) {
+        const link = document.createElement('a');
+        link.href = podcast.audioUrl;
+        link.download = `${podcast.arxivId}.mp3`;
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
+}
+
+// 创建全局播客播放器实例
+const podcastPlayer = new PodcastPlayer();
 
 // ==================== 初始化 ====================
 
@@ -744,6 +939,8 @@ function handleProgress(data) {
             const uploadStats = data.upload_results;
             addLog(`📊 上传统计: 成功 ${uploadStats.success || 0} 个, 失败 ${uploadStats.failed || 0} 个`, 'success');
         }
+        // 自动刷新播客列表
+        refreshPodcastListAfterGeneration();
     } else if (status === 'processing_single_item') {
         const current = data.current || 0;
         const total = data.total || 0;
@@ -924,6 +1121,313 @@ function showToast(message, type = 'success') {
     }, 3000);
 }
 
+// ==================== 播客稿查看功能 ====================
+
+/**
+ * 显示播客稿模态框
+ */
+async function showScriptModal(arxivId) {
+    try {
+        scriptModal.classList.remove('hidden');
+        scriptTitle.textContent = '加载中...';
+        scriptContent.innerHTML = '<div class="loading-placeholder">正在加载稿件内容...</div>';
+        scriptId.textContent = '加载中...';
+        scriptType.textContent = '加载中...';
+
+        // 获取播客稿列表
+        const response = await fetch('/api/podcast/scripts');
+        const data = await response.json();
+
+        if (!data.success) {
+            throw new Error(data.message || '获取播客稿列表失败');
+        }
+
+        // 查找匹配的播客稿
+        const script = data.scripts.find(s => s.arxiv_id === arxivId);
+
+        if (!script) {
+            scriptTitle.textContent = '未找到稿件';
+            scriptContent.innerHTML = '<div class="error-placeholder">未找到对应的播客稿件，可能还未生成或已被删除</div>';
+            scriptId.textContent = arxivId;
+            scriptType.textContent = '未知';
+            playAudioBtn.style.display = 'none';
+            return;
+        }
+
+        // 显示播客稿内容
+        scriptTitle.textContent = script.title;
+        scriptId.textContent = script.arxiv_id;
+
+        // 格式化来源类型
+        const typeMap = {
+            'excel': 'Excel文件',
+            'url': 'URL链接',
+            'article': '文本内容'
+        };
+        scriptType.textContent = typeMap[script.source_type] || '未知';
+
+        // 格式化稿件内容，高亮[S1]等标记
+        const formattedContent = formatScriptContent(script.script);
+        scriptContent.innerHTML = `<div class="script-text">${formattedContent}</div>`;
+
+        // 检查是否有对应的音频文件
+        playAudioBtn.style.display = 'block';
+        playAudioBtn.onclick = () => {
+            scriptModal.classList.add('hidden');
+            // 播放对应的音频
+            const podcastCard = document.querySelector(`[data-arxiv-id="${arxivId}"] .play-btn`);
+            if (podcastCard) {
+                podcastCard.click();
+            }
+        };
+
+        playAudioBtn.dataset.arxivId = arxivId;
+
+    } catch (error) {
+        console.error('加载播客稿失败:', error);
+        scriptTitle.textContent = '加载失败';
+        scriptContent.innerHTML = `<div class="error-placeholder">加载播客稿失败: ${error.message}</div>`;
+        scriptId.textContent = arxivId;
+        scriptType.textContent = '错误';
+        playAudioBtn.style.display = 'none';
+    }
+}
+
+/**
+ * 格式化播客稿内容
+ * @param {string} content - 原始内容
+ * @returns {string} 格式化后的HTML
+ */
+function formatScriptContent(content) {
+    if (!content) return '<div class="empty-placeholder">稿件内容为空</div>';
+
+    // 替换换行为<br>
+    let formatted = content.replace(/\n/g, '<br>');
+
+    // 高亮说话人标记 [S1], [S2] 等
+    formatted = formatted.replace(/\[S(\d+)\]/g, '<span class="speaker-tag">[S$1]</span>');
+
+    // 高亮其他标记
+    formatted = formatted.replace(/\[[^\]]+\]/g, '<span class="tag">$&</span>');
+
+    return formatted;
+}
+
+/**
+ * 关闭播客稿模态框
+ */
+function closeScriptModal() {
+    scriptModal.classList.add('hidden');
+    // 清理内容
+    scriptTitle.textContent = '加载中...';
+    scriptContent.innerHTML = '<div class="loading-placeholder">正在加载稿件内容...</div>';
+    scriptId.textContent = '加载中...';
+    scriptType.textContent = '加载中...';
+    playAudioBtn.style.display = 'none';
+}
+
+/**
+ * 复制播客稿内容
+ */
+async function copyScriptContent() {
+    try {
+        const textContent = scriptContent.textContent;
+        if (!textContent || textContent.includes('加载中') || textContent.includes('未找到')) {
+            showToast('没有可复制的稿件内容', 'error');
+            return;
+        }
+
+        await navigator.clipboard.writeText(textContent);
+        showToast('✅ 稿件内容已复制到剪贴板', 'success');
+    } catch (error) {
+        console.error('复制失败:', error);
+        showToast('❌ 复制失败，请手动选择复制', 'error');
+    }
+}
+
+// 绑定播客稿查看相关事件
+function setupScriptModalEvents() {
+    // 关闭按钮事件
+    closeScriptBtn.addEventListener('click', closeScriptModal);
+    closeScriptFooterBtn.addEventListener('click', closeScriptModal);
+
+    // 点击模态框背景关闭
+    scriptModal.addEventListener('click', (e) => {
+        if (e.target === scriptModal) {
+            closeScriptModal();
+        }
+    });
+
+    // 复制按钮事件
+    copyScriptBtn.addEventListener('click', copyScriptContent);
+
+    // ESC键关闭
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !scriptModal.classList.contains('hidden')) {
+            closeScriptModal();
+        }
+    });
+}
+
+// ==================== 播客相关功能 ====================
+
+/**
+ * 获取播客列表
+ */
+async function fetchPodcasts() {
+    try {
+        podcastList.innerHTML = '<div class="podcast-loading">正在加载播客列表...</div>';
+
+        const response = await fetch('/api/podcasts/latest');
+        const data = await response.json();
+
+        if (data.success && data.podcasts) {
+            renderPodcastList(data.podcasts);
+        } else {
+            renderEmptyState();
+        }
+    } catch (error) {
+        console.error('获取播客列表失败:', error);
+        renderEmptyState();
+        showToast('获取播客列表失败', 'error');
+    }
+}
+
+/**
+ * 渲染播客列表
+ * @param {Array} podcasts - 播客数组
+ */
+function renderPodcastList(podcasts) {
+    if (podcasts.length === 0) {
+        renderEmptyState();
+        return;
+    }
+
+    podcastList.innerHTML = podcasts.map(podcast => createPodcastCard(podcast)).join('');
+}
+
+/**
+ * 创建播客卡片 HTML
+ * @param {Object} podcast - 播客对象
+ * @returns {string} HTML 字符串
+ */
+function createPodcastCard(podcast) {
+    return `
+        <div class="podcast-card" data-arxiv-id="${podcast.arxivId}">
+            <div class="podcast-header-info">
+                <svg class="podcast-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path d="M9 18V5l12-2v13M9 18l-7 2V7l7-2v13zm0 0l6-2"/>
+                    <circle cx="6" cy="18" r="2"/>
+                    <circle cx="18" cy="16" r="2"/>
+                </svg>
+                <div class="podcast-title-info">
+                    <div class="podcast-arxiv-id">${podcast.arxivId}</div>
+                    <div class="podcast-title">${podcast.title}</div>
+                </div>
+            </div>
+
+            <div class="podcast-duration">⏱️ ${podcast.durationFormatted}</div>
+
+            <div class="podcast-controls">
+                <div class="podcast-progress">
+                    <div class="podcast-progress-bar"></div>
+                </div>
+                <div class="podcast-progress-time">0:00 / ${podcast.durationFormatted}</div>
+
+                <div class="podcast-actions">
+                    <button class="podcast-btn play-btn" data-podcast='${JSON.stringify(podcast)}' title="播放音频">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                        </svg>
+                    </button>
+                    <button class="podcast-btn download-btn" data-podcast='${JSON.stringify(podcast)}' title="下载音频">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"></path>
+                        </svg>
+                    </button>
+                    <button class="podcast-btn script-btn" data-arxiv-id="${podcast.arxivId}" title="查看稿件">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                            <polyline points="14,2 14,8 20,8"></polyline>
+                            <line x1="16" y1="13" x2="8" y2="13"></line>
+                            <line x1="16" y1="17" x2="8" y2="17"></line>
+                            <polyline points="10,9 9,9 8,9"></polyline>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+/**
+ * 渲染空状态
+ */
+function renderEmptyState() {
+    podcastList.innerHTML = `
+        <div class="podcast-empty">
+            <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path d="M9 18V5l12-2v13M9 18l-7 2V7l7-2v13zm0 0l6-2"/>
+                <circle cx="6" cy="18" r="2"/>
+                <circle cx="18" cy="16" r="2"/>
+            </svg>
+            <p>暂无播客</p>
+            <p class="empty-hint">上传文件生成播客后会显示在这里</p>
+        </div>
+    `;
+}
+
+/**
+ * 设置播客卡片事件监听器
+ */
+function setupPodcardEventListeners() {
+    // 播放按钮事件委托
+    podcastList.addEventListener('click', (e) => {
+        const playBtn = e.target.closest('.play-btn');
+        const downloadBtn = e.target.closest('.download-btn');
+        const scriptBtn = e.target.closest('.script-btn');
+
+        if (playBtn) {
+            const podcast = JSON.parse(playBtn.dataset.podcast);
+            const card = playBtn.closest('.podcast-card');
+            const progressBar = card.querySelector('.podcast-progress-bar');
+            const progressTime = card.querySelector('.podcast-progress-time');
+
+            podcastPlayer.togglePlay(podcast, playBtn, progressBar, progressTime);
+
+            // 更新卡片状态
+            document.querySelectorAll('.podcast-card').forEach(c => c.classList.remove('playing'));
+            if (podcastPlayer.isPlaying) {
+                card.classList.add('playing');
+            }
+        }
+
+        if (downloadBtn) {
+            const podcast = JSON.parse(downloadBtn.dataset.podcast);
+            podcastPlayer.download(podcast);
+        }
+
+        if (scriptBtn) {
+            const arxivId = scriptBtn.dataset.arxivId;
+            showScriptModal(arxivId);
+        }
+    });
+}
+
+// 刷新按钮事件
+refreshPodcastsBtn.addEventListener('click', () => {
+    fetchPodcasts();
+    showToast('正在刷新播客列表', 'info');
+});
+
+// 音频生成完成后自动刷新播客列表
+function refreshPodcastListAfterGeneration() {
+    setTimeout(() => {
+        fetchPodcasts();
+        addLog('🎧 正在刷新播客列表...', 'info');
+    }, 2000); // 等待2秒确保文件已保存
+}
+
 // ==================== 按钮事件 ====================
 
 // 清空日志
@@ -992,6 +1496,11 @@ cancelBtn.addEventListener('click', () => {
 // ==================== 初始化 ====================
 
 console.log('🎙️ Podcast Script Generator 已加载');
+
+// 初始化播客功能
+setupPodcardEventListeners();
+setupScriptModalEvents(); // 初始化播客稿查看功能
+fetchPodcasts(); // 页面加载时获取播客列表
 
 // 检查后端健康状态
 fetch('/api/health')

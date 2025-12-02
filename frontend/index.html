@@ -92,9 +92,11 @@
             </div>
         </div>
 
-        <main>
-            <!-- 输入模式切换器 -->
-            <section class="input-mode-section">
+        <main class="main-layout">
+            <!-- 左侧面板：操作区 -->
+            <div class="left-panel">
+                <!-- 输入模式切换器 -->
+                <section class="input-mode-section">
                 <div class="mode-tabs">
                     <button class="mode-tab active" data-mode="excel">
                         📄 Excel上传
@@ -252,6 +254,36 @@
                 <p id="errorMessage" class="error-message"></p>
                 <button id="retryBtn" class="btn-primary">重试</button>
             </section>
+            </div>
+            <!-- 左侧面板结束 -->
+
+            <!-- 右侧面板：播客列表 -->
+            <div class="right-panel">
+                <div class="podcast-panel">
+                    <div class="podcast-header">
+                        <h2>🎧 生成的播客</h2>
+                        <button id="refreshPodcastsBtn" class="btn-icon" title="刷新列表">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+                            </svg>
+                        </button>
+                    </div>
+
+                    <!-- 播客列表容器 -->
+                    <div id="podcastList" class="podcast-list">
+                        <div class="podcast-empty">
+                            <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <path d="M9 18V5l12-2v13M9 18l-7 2V7l7-2v13zm0 0l6-2"/>
+                                <circle cx="6" cy="18" r="2"/>
+                                <circle cx="18" cy="16" r="2"/>
+                            </svg>
+                            <p>暂无播客</p>
+                            <p class="empty-hint">上传文件生成播客后会显示在这里</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <!-- 右侧面板结束 -->
         </main>
 
         <footer>
@@ -261,6 +293,50 @@
 
     <!-- Toast 提示框 -->
     <div id="toast" class="toast hidden"></div>
+
+    <!-- 播客稿查看模态框 -->
+    <div id="scriptModal" class="modal hidden">
+        <div class="modal-content script-modal">
+            <div class="modal-header">
+                <h2>🎙️ 播客稿件详情</h2>
+                <div class="modal-actions">
+                    <button id="copyScriptBtn" class="btn-secondary" title="复制稿件">
+                        📋 复制
+                    </button>
+                    <button id="closeScriptBtn" class="btn-close">&times;</button>
+                </div>
+            </div>
+            <div class="modal-body">
+                <div class="script-info">
+                    <div class="info-item">
+                        <label>📝 稿件标题:</label>
+                        <div id="scriptTitle" class="info-value">加载中...</div>
+                    </div>
+                    <div class="info-item">
+                        <label>🆔 文件ID:</label>
+                        <div id="scriptId" class="info-value">加载中...</div>
+                    </div>
+                    <div class="info-item">
+                        <label>📂 来源类型:</label>
+                        <div id="scriptType" class="info-value">加载中...</div>
+                    </div>
+                </div>
+
+                <div class="script-content">
+                    <label>📄 稿件内容:</label>
+                    <div id="scriptContent" class="script-text">
+                        <div class="loading-placeholder">正在加载稿件内容...</div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="playAudioBtn" class="btn-primary" style="display: none;">
+                    🎵 播放音频
+                </button>
+                <button id="closeScriptFooterBtn" class="btn-secondary">关闭</button>
+            </div>
+        </div>
+    </div>
 
     <script src="app.js"></script>
 </body>

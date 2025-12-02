@@ -1891,12 +1891,24 @@ app.post('/api/execute', upload.single('file'), async (req, res) => {
 
             const formattedResults = urlResults
                 .filter(r => r.success)
-                .map(r => ({
-                    title: r.podcast_title,
-                    script: r.podcast_script,
-                    url_id: r.url_id,
-                    source_url: r.source_url
-                }));
+                .map(r => {
+                    // 从标题中提取文件名安全的名称
+                    const safeTitle = r.podcast_title
+                        .replace(/[^\w\u4e00-\u9fa5\s-]/g, '') // 保留中英文、数字、空格、连字符
+                        .replace(/\s+/g, '_') // 空格替换为下划线
+                        .substring(0, 50); // 限制长度
+
+                    const fileSafeId = safeTitle || `url_${r.url_id}`;
+
+                    return {
+                        title: r.podcast_title,
+                        script: r.podcast_script,
+                        url_id: r.url_id,
+                        source_url: r.source_url,
+                        file_id: fileSafeId, // 新增：用于生成音频文件名的ID
+                        arxiv_id: fileSafeId // 兼容Python脚本的arxiv_id字段
+                    };
+                });
 
             const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
             const resultFilename = `URL播客稿-${timestamp}.json`;
@@ -1912,7 +1924,16 @@ app.post('/api/execute', upload.single('file'), async (req, res) => {
             urlResults.forEach((result, idx) => {
                 if (result.success) {
                     urlMapping[`url_${idx}`] = result.url_id;
+
+                    // 使用相同的文件安全ID逻辑
+                    const safeTitle = result.podcast_title
+                        .replace(/[^\w\u4e00-\u9fa5\s-]/g, '')
+                        .replace(/\s+/g, '_')
+                        .substring(0, 50);
+
+                    const fileSafeId = safeTitle || `url_${result.url_id}`;
                     titleMapping[result.url_id] = result.podcast_title;
+                    titleMapping[fileSafeId] = result.podcast_title; // 添加文件ID映射
                 }
             });
 
@@ -2004,19 +2025,31 @@ app.post('/api/execute', upload.single('file'), async (req, res) => {
             const resultFilename = `文本播客稿-${timestamp}.json`;
             const resultPath = path.join(config.getOutputDir(), resultFilename);
 
+          // 从标题中提取文件名安全的名称
+            const safeTitle = result.podcast_title
+                .replace(/[^\w\u4e00-\u9fa5\s-]/g, '') // 保留中英文、数字、空格、连字符
+                .replace(/\s+/g, '_') // 空格替换为下划线
+                .substring(0, 50); // 限制长度
+
+            const fileSafeId = safeTitle || `article_${result.text_id}`;
+
             const formattedResult = [{
                 title: result.podcast_title,
                 script: result.podcast_script,
-                text_id: result.text_id
+                text_id: result.text_id,
+                file_id: fileSafeId, // 新增：用于生成音频文件名的ID
+                arxiv_id: fileSafeId // 兼容Python脚本的arxiv_id字段
             }];
 
             fs.writeFileSync(resultPath, JSON.stringify(formattedResult, null, 2), 'utf8');
             logger.info(`播客脚本已保存: ${resultPath}`);
 
             // 保存映射文件（用于TTS）
-            const titleMapping = {
-                [result.text_id]: result.podcast_title
-            };
+            const titleMapping = {};
+
+            // 使用已有的safeTitle变量
+            titleMapping[result.text_id] = result.podcast_title;
+            titleMapping[fileSafeId] = result.podcast_title; // 添加文件ID映射
 
             const titleMappingPath = path.join(config.getOutputDir(), 'podcast_titles.json');
             fs.writeFileSync(titleMappingPath, JSON.stringify(titleMapping, null, 2), 'utf8');
@@ -2241,6 +2274,143 @@ app.get('/api/dify/logs/:workflow_run_id', async (req, res) => {
             success: false,
             message: error.message,
             error: error.stack
+        });
+    }
+});
+
+// ==================== 播客稿查看 API ====================
+
+// 获取最新播客稿列表
+app.get('/api/podcast/scripts', async (req, res) => {
+    try {
+        const outputDir = config.getOutputDir();
+        const scripts = [];
+
+        // 读取输出目录中的JSON文件
+        try {
+            const files = fs.readdirSync(outputDir);
+            const jsonFiles = files.filter(file =>
+                file.endsWith('.json') &&
+                (file.includes('播客稿') || file.includes('podcast'))
+            );
+
+            // 按修改时间排序，最新的在前
+            const sortedFiles = jsonFiles
+                .map(file => ({
+                    name: file,
+                    path: path.join(outputDir, file),
+                    mtime: fs.statSync(path.join(outputDir, file)).mtime
+                }))
+                .sort((a, b) => b.mtime - a.mtime)
+                .slice(0, 10); // 只取最近10个
+
+            for (const file of sortedFiles) {
+                try {
+                    const content = fs.readFileSync(file.path, 'utf8');
+                    const data = JSON.parse(content);
+
+                    if (Array.isArray(data)) {
+                        data.forEach((item, index) => {
+                            scripts.push({
+                                id: `${file.name}_${index}`,
+                                filename: file.name,
+                                title: item.title || `播客稿 ${index + 1}`,
+                                script: item.script || '',
+                                arxiv_id: item.arxiv_id || item.file_id || `unknown_${index}`,
+                                created_at: file.mtime.toISOString(),
+                                source_type: file.name.includes('URL') ? 'url' :
+                                             file.name.includes('文本') ? 'article' : 'excel'
+                            });
+                        });
+                    }
+                } catch (fileError) {
+                    console.warn(`读取文件失败 ${file.name}:`, fileError.message);
+                }
+            }
+        } catch (dirError) {
+            console.warn('读取输出目录失败:', dirError.message);
+        }
+
+        res.json({
+            success: true,
+            count: scripts.length,
+            scripts: scripts.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+        });
+    } catch (error) {
+        console.error('获取播客稿列表失败:', error);
+        res.status(500).json({
+            success: false,
+            message: '获取播客稿列表失败',
+            error: error.message
+        });
+    }
+});
+
+// 获取单个播客稿详情
+app.get('/api/podcast/scripts/:scriptId', async (req, res) => {
+    try {
+        const { scriptId } = req.params;
+
+        // 解析scriptId格式：filename_index
+        const [filename, indexStr] = scriptId.split('_');
+        const index = parseInt(indexStr);
+
+        if (isNaN(index)) {
+            return res.status(400).json({
+                success: false,
+                message: '无效的脚本ID格式'
+            });
+        }
+
+        const outputDir = config.getOutputDir();
+        const filePath = path.join(outputDir, filename);
+
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).json({
+                success: false,
+                message: '播客稿文件不存在'
+            });
+        }
+
+        try {
+            const content = fs.readFileSync(filePath, 'utf8');
+            const data = JSON.parse(content);
+
+            if (!Array.isArray(data) || index >= data.length) {
+                return res.status(404).json({
+                    success: false,
+                    message: '指定的播客稿不存在'
+                });
+            }
+
+            const script = data[index];
+
+            res.json({
+                success: true,
+                script: {
+                    id: scriptId,
+                    title: script.title || `播客稿 ${index + 1}`,
+                    content: script.script || '',
+                    arxiv_id: script.arxiv_id || script.file_id || `unknown_${index}`,
+                    channel_id: script.channel_id || '',
+                    created_at: fs.statSync(filePath).mtime.toISOString(),
+                    source_type: filename.includes('URL') ? 'url' :
+                                 filename.includes('文本') ? 'article' : 'excel'
+                }
+            });
+        } catch (parseError) {
+            console.error('解析播客稿文件失败:', parseError);
+            res.status(500).json({
+                success: false,
+                message: '播客稿文件格式错误'
+            });
+        }
+    } catch (error) {
+        console.error('获取播客稿详情失败:', error);
+        res.status(500).json({
+            success: false,
+            message: '获取播客稿详情失败',
+            error: error.message
         });
     }
 });

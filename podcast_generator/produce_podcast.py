@@ -87,6 +87,35 @@ def load_voice_references():
     return references
 
 # ==================== 脚本解析 ====================
+def sanitize_filename(title):
+    """
+    将标题转换为安全的文件名
+
+    Args:
+        title: 原始标题
+
+    Returns:
+        str: 安全的文件名
+    """
+    import re
+    # 移除或替换不安全的字符
+    safe_name = re.sub(r'[<>:"/\\|?*]', '', title)  # 移除Windows不支持的字符
+    safe_name = re.sub(r'[^\w\u4e00-\u9fa5\s-]', '', safe_name)  # 保留中英文、数字、空格、连字符
+    safe_name = re.sub(r'\s+', '_', safe_name)  # 空格替换为下划线
+    safe_name = safe_name.strip('-_')  # 移除开头结尾的连字符和下划线
+
+    # 限制长度
+    if len(safe_name) > 50:
+        safe_name = safe_name[:50]
+
+    # 如果为空，使用默认名称
+    if not safe_name:
+        import time
+        safe_name = f"podcast_{int(time.time())}"
+
+    return safe_name
+
+
 def load_arxiv_mapping(output_dir):
     """
     加载arXiv ID映射文件
@@ -165,19 +194,39 @@ def parse_podcast_script(script_path, arxiv_id_override=None, arxiv_mapping=None
                     # 字典格式
                     title = item.get('title', f'segment_{idx}')
                     script = item.get('script', '')
-                    arxiv_id = item.get('arxiv_id', arxiv_id_override or f'unknown_{idx}')
+
+                    # 🔧 改进的文件名生成逻辑
+                    # 优先使用arxiv_id，其次使用file_id，最后从标题生成
+                    arxiv_id = item.get('arxiv_id', '')
+                    file_id = item.get('file_id', '')
+
+                    if arxiv_id and not arxiv_id.startswith('unknown_') and not arxiv_id.startswith('segment_'):
+                        # 使用有效的arxiv_id
+                        final_arxiv_id = arxiv_id
+                        print(f"[Parse] 使用arxiv_id: {arxiv_id}")
+                    elif file_id and not file_id.startswith('unknown_') and not file_id.startswith('segment_'):
+                        # 使用file_id
+                        final_arxiv_id = file_id
+                        print(f"[Parse] 使用file_id: {file_id}")
+                    else:
+                        # 从标题生成安全文件名
+                        final_arxiv_id = sanitize_filename(title)
+                        print(f"[Parse] 从标题生成文件名: {title} -> {final_arxiv_id}")
+
                     channel_id = item.get('channel_id', '')
 
-                    # 尝试从映射中获取真实的arXiv ID
-                    if arxiv_id.startswith('unknown_') or arxiv_id.startswith('segment_'):
+                    # 额外尝试从映射中获取真实的arXiv ID
+                    if arxiv_mapping:
                         # 尝试从标题匹配
                         clean_title = title.replace(' ', '_')[:50]
                         if clean_title in arxiv_mapping:
-                            arxiv_id = arxiv_mapping[clean_title]
-                            print(f"[Mapping] 从标题匹配到arXiv ID: {title} -> {arxiv_id}")
+                            final_arxiv_id = arxiv_mapping[clean_title]
+                            print(f"[Mapping] 从标题匹配到arXiv ID: {title} -> {final_arxiv_id}")
                         elif f'paper_{idx}' in arxiv_mapping:
-                            arxiv_id = arxiv_mapping[f'paper_{idx}']
-                            print(f"[Mapping] 从索引匹配到arXiv ID: paper_{idx} -> {arxiv_id}")
+                            mapped_id = arxiv_mapping[f'paper_{idx}']
+                            if not mapped_id.startswith('unknown_'):
+                                final_arxiv_id = mapped_id
+                                print(f"[Mapping] 从索引匹配到arXiv ID: paper_{idx} -> {final_arxiv_id}")
 
                     if not script:
                         print(f"[WARN] 警告: 段落 {idx} 的 script 字段为空")
@@ -185,22 +234,24 @@ def parse_podcast_script(script_path, arxiv_id_override=None, arxiv_mapping=None
                     parsed_segments.append({
                         "title": title,
                         "script": script,
-                        "arxiv_id": arxiv_id,
+                        "arxiv_id": final_arxiv_id,
                         "channel_id": channel_id
                     })
                 elif isinstance(item, str):
                     # 字符串格式
-                    arxiv_id = arxiv_id_override or f'unknown_{idx}'
+                    final_arxiv_id = arxiv_id_override or f'unknown_{idx}'
 
                     # 尝试从映射获取
-                    if f'paper_{idx}' in arxiv_mapping:
-                        arxiv_id = arxiv_mapping[f'paper_{idx}']
-                        print(f"[Mapping] 从索引匹配到arXiv ID: paper_{idx} -> {arxiv_id}")
+                    if arxiv_mapping and f'paper_{idx}' in arxiv_mapping:
+                        mapped_id = arxiv_mapping[f'paper_{idx}']
+                        if not mapped_id.startswith('unknown_'):
+                            final_arxiv_id = mapped_id
+                            print(f"[Mapping] 从索引匹配到arXiv ID: paper_{idx} -> {final_arxiv_id}")
 
                     parsed_segments.append({
                         "title": f'segment_{idx}',
                         "script": item,
-                        "arxiv_id": arxiv_id,
+                        "arxiv_id": final_arxiv_id,
                         "channel_id": ''
                     })
                 else:
@@ -215,23 +266,29 @@ def parse_podcast_script(script_path, arxiv_id_override=None, arxiv_mapping=None
                 filename = os.path.basename(script_path)
 
                 # 首先尝试从映射文件获取（使用paper_0，因为单个文件通常对应第一条记录）
-                if 'paper_0' in arxiv_mapping:
-                    arxiv_id_override = arxiv_mapping['paper_0']
-                    print(f"[Mapping] 使用映射文件中的arXiv ID: {arxiv_id_override}")
-                else:
-                    # 尝试从文件名提取时间戳作为ID
+                if arxiv_mapping and 'paper_0' in arxiv_mapping:
+                    mapped_id = arxiv_mapping['paper_0']
+                    if not mapped_id.startswith('unknown_'):
+                        arxiv_id_override = mapped_id
+                        print(f"[Mapping] 使用映射文件中的arXiv ID: {arxiv_id_override}")
+
+                # 如果没有有效映射，尝试从文件名提取时间戳作为ID
+                if not arxiv_id_override or arxiv_id_override.startswith('unknown_'):
                     import re
                     timestamp_match = re.search(r'(\d{4}-\d{2}-\d{2}[- ]\d{2}-\d{2}-\d{2})', filename)
                     if timestamp_match:
                         arxiv_id_override = timestamp_match.group(1).replace(' ', '-')
                     else:
-                        arxiv_id_override = f'podcast_{int(time.time())}'
+                        # 使用文件名（去除扩展名）作为基础
+                        base_name = os.path.splitext(filename)[0]
+                        arxiv_id_override = sanitize_filename(base_name)
 
-            # 整个文件作为单个脚本
+            # 整个文件作为单个脚本，使用从文件名提取的ID
+            final_arxiv_id = arxiv_id_override or f'podcast_{int(time.time())}'
             parsed_segments.append({
                 "title": os.path.splitext(os.path.basename(script_path))[0],
                 "script": content,
-                "arxiv_id": arxiv_id_override,
+                "arxiv_id": final_arxiv_id,
                 "channel_id": ''
             })
 
