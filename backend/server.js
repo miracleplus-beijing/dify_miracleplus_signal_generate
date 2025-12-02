@@ -2439,29 +2439,50 @@ app.get('/api/podcasts/latest', async (req, res) => {
 // 流式传输音频文件
 app.get('/api/audio/:filename', (req, res) => {
     try {
-        const { filename } = req.params;
+        let { filename } = req.params;
 
-        // 验证文件名格式（防止路径穿越攻击）
-        if (!/^[\w\.-]+\.mp3$/.test(filename)) {
+        // URL解码处理
+        filename = decodeURIComponent(filename);
+        console.log('请求音频文件（解码后）:', filename);
+
+        // 验证文件名格式（防止路径穿越攻击，支持中文文件名）
+        // 允许：中文字符、英文字母、数字、点、横线、下划线、空格，必须以.mp3结尾
+        if (!/^[\u4e00-\u9fa5\w\.\-\s]+\.mp3$/i.test(filename)) {
+            console.error('无效的文件名格式:', filename);
             return res.status(400).json({
                 success: false,
-                message: '无效的文件名'
+                message: '无效的文件名格式'
             });
         }
 
         const audioPath = AudioService.getAudioFilePath(filename);
+        console.log('音频文件路径:', audioPath);
 
-        if (!audioPath || !fs.existsSync(audioPath)) {
+        if (!audioPath) {
+            console.error('无法找到音频文件路径:', filename);
             return res.status(404).json({
                 success: false,
-                message: '音频文件不存在'
+                message: '音频文件不存在',
+                filename: filename
+            });
+        }
+
+        if (!fs.existsSync(audioPath)) {
+            console.error('音频文件不存在:', audioPath);
+            return res.status(404).json({
+                success: false,
+                message: '音频文件不存在',
+                path: audioPath
             });
         }
 
         // 获取文件大小
         const stat = fs.statSync(audioPath);
         const fileSize = stat.size;
+        console.log('音频文件大小:', fileSize, 'bytes');
+
         const range = req.headers.range;
+        console.log('Range header:', range);
 
         if (range) {
             // 支持范围请求（用于拖动进度条）
@@ -2471,20 +2492,25 @@ app.get('/api/audio/:filename', (req, res) => {
             const chunksize = (end - start) + 1;
             const file = fs.createReadStream(audioPath, { start, end });
 
+            console.log('范围请求:', start, '-', end, 'chunksize:', chunksize);
+
             res.writeHead(206, {
                 'Content-Range': `bytes ${start}-${end}/${fileSize}`,
                 'Accept-Ranges': 'bytes',
                 'Content-Length': chunksize,
-                'Content-Type': 'audio/mpeg'
+                'Content-Type': 'audio/mpeg',
+                'Cache-Control': 'public, max-age=3600' // 添加缓存控制
             });
 
             file.pipe(res);
         } else {
             // 常规请求
+            console.log('常规音频文件请求');
             res.writeHead(200, {
                 'Content-Length': fileSize,
                 'Content-Type': 'audio/mpeg',
-                'Accept-Ranges': 'bytes'
+                'Accept-Ranges': 'bytes',
+                'Cache-Control': 'public, max-age=3600' // 添加缓存控制
             });
 
             fs.createReadStream(audioPath).pipe(res);

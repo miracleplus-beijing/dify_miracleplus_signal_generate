@@ -178,14 +178,64 @@ class AudioService {
         try {
             const latestDir = this.getLatestDateDir();
             if (!latestDir) {
+                console.error('无法找到最新日期目录');
                 return null;
             }
 
-            const audioPath = path.join(latestDir, filename);
+            // 方法1：直接查找文件名（适用于arXiv ID命名的文件）
+            let audioPath = path.join(latestDir, filename);
             if (fs.existsSync(audioPath)) {
+                console.log('通过直接查找找到音频文件:', audioPath);
                 return audioPath;
             }
 
+            // 方法2：从中文文件名映射（适用于早期中文标题命名的文件）
+            console.log('直接查找失败，尝试从中文文件名映射...');
+
+            // 获取所有mp3文件
+            const mp3Files = fs.readdirSync(latestDir)
+                .filter(file => file.endsWith('.mp3'));
+
+            // 提取arXiv ID（去掉.mp3扩展名）
+            const arxivId = path.basename(filename, '.mp3');
+            console.log('查找arXiv ID:', arxivId);
+
+            // 读取podcast_titles.json来查找对应关系
+            const titlesPath = path.join(latestDir, 'podcast_titles.json');
+            const titles = this.readJsonFile(titlesPath);
+
+            if (titles && titles[arxivId]) {
+                // 查找包含该标题的中文文件
+                const targetTitle = titles[arxivId];
+                console.log('目标标题:', targetTitle);
+
+                for (const file of mp3Files) {
+                    const baseName = path.basename(file, '.mp3');
+                    // 检查是否为中文文件名（包含arXiv ID的模式则跳过）
+                    if (!/^\d{4}\.\d+v\d+$/.test(baseName) && baseName.includes(targetTitle.substring(0, 10))) {
+                        audioPath = path.join(latestDir, file);
+                        if (fs.existsSync(audioPath)) {
+                            console.log('通过标题映射找到中文音频文件:', audioPath);
+                            return audioPath;
+                        }
+                    }
+                }
+            }
+
+            // 方法3：模糊匹配（兜底方案）
+            console.log('尝试模糊匹配...');
+            for (const file of mp3Files) {
+                const baseName = path.basename(file, '.mp3');
+                if (baseName.includes(arxivId) || arxivId.includes(baseName)) {
+                    audioPath = path.join(latestDir, file);
+                    if (fs.existsSync(audioPath)) {
+                        console.log('通过模糊匹配找到音频文件:', audioPath);
+                        return audioPath;
+                    }
+                }
+            }
+
+            console.error('未找到音频文件:', filename, 'arXiv ID:', arxivId);
             return null;
         } catch (error) {
             console.error('获取音频文件路径失败:', error);

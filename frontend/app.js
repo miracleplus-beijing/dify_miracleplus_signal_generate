@@ -121,7 +121,23 @@ class PodcastPlayer {
 
         // 开始播放新的播客
         this.currentPodcast = podcast;
-        this.currentAudio = new Audio(podcast.audioUrl);
+
+        // 确保音频URL正确编码
+        let audioUrl = podcast.audioUrl;
+        if (audioUrl && !audioUrl.includes('/api/audio/')) {
+            // 如果不是API路径，直接使用
+            this.currentAudio = new Audio(audioUrl);
+        } else {
+            // API路径需要确保文件名正确编码
+            const urlParts = audioUrl.split('/api/audio/');
+            if (urlParts.length === 2) {
+                const filename = urlParts[1];
+                const encodedFilename = encodeURIComponent(filename);
+                audioUrl = `/api/audio/${encodedFilename}`;
+                console.log('编码音频URL:', audioUrl);
+            }
+            this.currentAudio = new Audio(audioUrl);
+        }
 
         this.setupAudioEvents(playButton, progressBar, progressTime);
         await this.play();
@@ -141,7 +157,36 @@ class PodcastPlayer {
             this.isPlaying = true;
         } catch (error) {
             console.error('播放失败:', error);
-            showToast('播放失败: ' + error.message, 'error');
+            console.error('音频URL:', this.currentPodcast?.audioUrl);
+            console.error('音频元素状态:', {
+                src: this.currentAudio.src,
+                readyState: this.currentAudio.readyState,
+                networkState: this.currentAudio.networkState,
+                error: this.currentAudio.error
+            });
+
+            // 提供更详细的错误信息
+            let errorMessage = error.message;
+            if (this.currentAudio.error) {
+                switch (this.currentAudio.error.code) {
+                    case this.currentAudio.error.MEDIA_ERR_ABORTED:
+                        errorMessage = '音频加载被中断';
+                        break;
+                    case this.currentAudio.error.MEDIA_ERR_NETWORK:
+                        errorMessage = '网络错误，无法加载音频文件';
+                        break;
+                    case this.currentAudio.error.MEDIA_ERR_DECODE:
+                        errorMessage = '音频文件解码失败';
+                        break;
+                    case this.currentAudio.error.MEDIA_ERR_SRC_NOT_SUPPORTED:
+                        errorMessage = '不支持的音频格式或文件不存在';
+                        break;
+                    default:
+                        errorMessage = `音频播放错误 (${this.currentAudio.error.code}): ${this.currentAudio.error.message}`;
+                }
+            }
+
+            showToast('播放失败: ' + errorMessage, 'error');
         }
     }
 
@@ -174,8 +219,8 @@ class PodcastPlayer {
         });
 
         // 重置所有进度条
-        document.querySelectorAll('.podcast-progress-bar').forEach(bar => {
-            bar.style.width = '0%';
+        document.querySelectorAll('.podcast-progress-time').forEach(time => {
+            time.textContent = '0:00'; 
         });
 
         // 重置所有时间显示
@@ -193,6 +238,21 @@ class PodcastPlayer {
      * 设置音频事件监听器
      */
     setupAudioEvents(playButton, progressBar, progressTime) {
+        // 加载开始事件
+        this.currentAudio.addEventListener('loadstart', () => {
+            console.log('开始加载音频:', this.currentPodcast?.audioUrl);
+        });
+
+        // 可以播放事件
+        this.currentAudio.addEventListener('canplay', () => {
+            console.log('音频可以播放');
+        });
+
+        // 加载完成事件
+        this.currentAudio.addEventListener('loadeddata', () => {
+            console.log('音频数据加载完成，时长:', this.currentAudio.duration);
+        });
+
         // 更新进度条
         this.currentAudio.addEventListener('timeupdate', () => {
             if (this.currentAudio.duration) {
@@ -207,10 +267,33 @@ class PodcastPlayer {
             this.stop();
         });
 
-        // 错误处理
+        // 错误处理 - 增强版
         this.currentAudio.addEventListener('error', (e) => {
-            console.error('音频播放错误:', e);
-            showToast('音频播放失败', 'error');
+            console.error('音频元素错误事件:', e);
+            console.error('音频错误详情:', this.currentAudio.error);
+            console.error('音频URL:', this.currentPodcast?.audioUrl);
+
+            let errorMessage = '音频播放失败';
+            if (this.currentAudio.error) {
+                switch (this.currentAudio.error.code) {
+                    case this.currentAudio.error.MEDIA_ERR_ABORTED:
+                        errorMessage = '音频加载被中断';
+                        break;
+                    case this.currentAudio.error.MEDIA_ERR_NETWORK:
+                        errorMessage = '网络错误，无法加载音频文件';
+                        break;
+                    case this.currentAudio.error.MEDIA_ERR_DECODE:
+                        errorMessage = '音频文件解码失败';
+                        break;
+                    case this.currentAudio.error.MEDIA_ERR_SRC_NOT_SUPPORTED:
+                        errorMessage = '不支持的音频格式或文件不存在';
+                        break;
+                    default:
+                        errorMessage = `音频错误 (${this.currentAudio.error.code}): ${this.currentAudio.error.message}`;
+                }
+            }
+
+            showToast(errorMessage, 'error');
             this.stop();
         });
     }
@@ -1315,43 +1398,55 @@ function createPodcastCard(podcast) {
     return `
         <div class="podcast-card" data-arxiv-id="${podcast.arxivId}">
             <div class="podcast-header-info">
-                <svg class="podcast-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                    <path d="M9 18V5l12-2v13M9 18l-7 2V7l7-2v13zm0 0l6-2"/>
-                    <circle cx="6" cy="18" r="2"/>
-                    <circle cx="18" cy="16" r="2"/>
-                </svg>
+                <div class="podcast-icon-wrapper">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M9 18V5l12-2v13"></path>
+                        <circle cx="6" cy="18" r="3"></circle>
+                        <circle cx="18" cy="16" r="3"></circle>
+                    </svg>
+                </div>
                 <div class="podcast-title-info">
-                    <div class="podcast-arxiv-id">${podcast.arxivId}</div>
-                    <div class="podcast-title">${podcast.title}</div>
+                    <div class="podcast-title" title="${podcast.title}">${podcast.title}</div>
+                    <div class="podcast-meta">
+                        <span class="podcast-arxiv-id">${podcast.arxivId}</span>
+                        <span>•</span>
+                        <span>${podcast.durationFormatted}</span>
+                    </div>
                 </div>
             </div>
 
-            <div class="podcast-duration">⏱️ ${podcast.durationFormatted}</div>
-
-            <div class="podcast-controls">
+            <div class="podcast-progress-container">
                 <div class="podcast-progress">
-                    <div class="podcast-progress-bar"></div>
+                    <div class="podcast-progress-bar" style="width: 0%"></div>
                 </div>
-                <div class="podcast-progress-time">0:00 / ${podcast.durationFormatted}</div>
+                <div class="podcast-progress-time">0:00</div>
+            </div>
 
+            <div class="podcast-footer">
                 <div class="podcast-actions">
                     <button class="podcast-btn play-btn" data-podcast='${JSON.stringify(podcast)}' title="播放音频">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <polygon points="5 3 19 12 5 21 5 3"></polygon>
                         </svg>
+                        <span>播放</span>
                     </button>
-                    <button class="podcast-btn download-btn" data-podcast='${JSON.stringify(podcast)}' title="下载音频">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"></path>
-                        </svg>
-                    </button>
+
                     <button class="podcast-btn script-btn" data-arxiv-id="${podcast.arxivId}" title="查看稿件">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                            <polyline points="14,2 14,8 20,8"></polyline>
+                            <polyline points="14 2 14 8 20 8"></polyline>
                             <line x1="16" y1="13" x2="8" y2="13"></line>
                             <line x1="16" y1="17" x2="8" y2="17"></line>
-                            <polyline points="10,9 9,9 8,9"></polyline>
+                            <polyline points="10 9 9 9 8 9"></polyline>
+                        </svg>
+                        <span>文稿</span>
+                    </button>
+
+                    <button class="podcast-btn download-btn" data-podcast='${JSON.stringify(podcast)}' title="下载音频">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="7 10 12 15 17 10"></polyline>
+                            <line x1="12" y1="15" x2="12" y2="3"></line>
                         </svg>
                     </button>
                 </div>
