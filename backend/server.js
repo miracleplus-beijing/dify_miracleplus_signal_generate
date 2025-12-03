@@ -2541,7 +2541,7 @@ app.get('/api/health', (req, res) => {
 
 app.listen(config.PORT, config.HOST, () => {
     console.log('========================================');
-    console.log('  🎙️ Podcast Script Generator');
+    console.log('  🎙️ 前沿信号Alpha Sight播客生成器');
     console.log('========================================');
     console.log(`📡 服务地址: http://${config.HOST}:${config.PORT}`);
     console.log(`📁 输出目录: ${config.getOutputDir()}`);
