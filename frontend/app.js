@@ -74,12 +74,12 @@ let outputDirectory = null; // 输出目录路径
 // 标题映射
 const WORKFLOW_TITLES = {
     'PODCAST': {
-        title: '🎙️ Podcast Script Generator',
-        subtitle: '拖拽 Excel 文件生成播客脚本'
+        title: '🎙️ 前沿信号Alpha Sight播客生成器',
+        subtitle: 'Powered by'
     },
     'CHEESE_DAILY': {
         title: '🧀 Cheese Daily',
-        subtitle: '拖拽 Excel 文件生成每日内容'
+        subtitle: '前沿信号Alpha Sight播客生成'
     }
 };
 
@@ -348,7 +348,7 @@ const podcastPlayer = new PodcastPlayer();
 
 // ==================== 初始化 ====================
 
-console.log('🎙️ Podcast Script Generator 已加载');
+console.log('🎙️ 前沿信号Alpha Sight播客生成器 已加载');
 
 // 加载设置
 loadSettings();
@@ -373,7 +373,16 @@ function updatePageTitle(workflowId) {
     const config = WORKFLOW_TITLES[workflowId];
     if (config) {
         document.querySelector('header h1').textContent = config.title;
-        document.querySelector('header p').textContent = config.subtitle;
+
+        // 更新副标题文字，保留图片结构
+        const creditElement = document.querySelector('.openmoss-credit span');
+        if (creditElement) {
+            creditElement.textContent = config.subtitle;
+        } else {
+            // 如果没有找到 span，降级为直接设置文本
+            document.querySelector('header p').textContent = config.subtitle;
+        }
+
         document.title = config.title;
     }
 }
@@ -1461,11 +1470,7 @@ function createPodcastCard(podcast) {
 function renderEmptyState() {
     podcastList.innerHTML = `
         <div class="podcast-empty">
-            <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                <path d="M9 18V5l12-2v13M9 18l-7 2V7l7-2v13zm0 0l6-2"/>
-                <circle cx="6" cy="18" r="2"/>
-                <circle cx="18" cy="16" r="2"/>
-            </svg>
+            <div class="empty-icon">🎵</div>
             <p>暂无播客</p>
             <p class="empty-hint">上传文件生成播客后会显示在这里</p>
         </div>
@@ -1590,7 +1595,7 @@ cancelBtn.addEventListener('click', () => {
 
 // ==================== 初始化 ====================
 
-console.log('🎙️ Podcast Script Generator 已加载');
+console.log('🎙️ 前沿信号Alpha Sight播客生成器 已加载');
 
 // 初始化播客功能
 setupPodcardEventListeners();
