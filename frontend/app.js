@@ -74,12 +74,12 @@ let outputDirectory = null; // 输出目录路径
 // 标题映射
 const WORKFLOW_TITLES = {
     'PODCAST': {
-        title: '🎙️ 前沿信号Alpha Sight播客生成器',
+        title: '🎙️ 奇绩信号Alpha Sight播客生成器',
         subtitle: 'Powered by'
     },
     'CHEESE_DAILY': {
         title: '🧀 Cheese Daily',
-        subtitle: '前沿信号Alpha Sight播客生成'
+        subtitle: '奇绩信号Alpha Sight播客生成'
     }
 };
 
@@ -348,7 +348,7 @@ const podcastPlayer = new PodcastPlayer();
 
 // ==================== 初始化 ====================
 
-console.log('🎙️ 前沿信号Alpha Sight播客生成器 已加载');
+console.log('🎙️ 奇绩信号Alpha Sight播客生成器 已加载');
 
 // 加载设置
 loadSettings();
@@ -1595,7 +1595,7 @@ cancelBtn.addEventListener('click', () => {
 
 // ==================== 初始化 ====================
 
-console.log('🎙️ 前沿信号Alpha Sight播客生成器 已加载');
+console.log('🎙️ 奇绩信号Alpha Sight播客生成器 已加载');
 
 // 初始化播客功能
 setupPodcardEventListeners();

@@ -1,7 +1,7 @@
 {
   "name": "podcast-script-generator",
   "version": "1.0.0",
-  "description": "前沿信号Alpha Sight播客生成器 - Alpha Sight Podcast Generator using Dify Workflow",
+  "description": "奇绩信号Alpha Sight播客生成器 - Alpha Sight Podcast Generator using Dify Workflow",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

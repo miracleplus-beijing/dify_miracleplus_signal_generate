@@ -1,4 +1,4 @@
-# 前沿信号Alpha Sight播客生成器
+# 奇绩信号Alpha Sight播客生成器
 
 🎙️ 基于 Dify Workflow 的智能播客脚本生成和语音合成工具
 

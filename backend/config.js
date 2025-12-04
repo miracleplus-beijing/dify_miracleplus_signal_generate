@@ -10,7 +10,7 @@ class Config {
         // 多 Workflow 配置
         this.WORKFLOWS = {
             PODCAST: {
-                name: '前沿信号Alpha Sight播客生成器',
+                name: '奇绩信号Alpha Sight播客生成器',
                 apiKey: process.env.DIFY_PODCAST_API_KEY || '',
                 workflowId: process.env.DIFY_PODCAST_WORKFLOW_ID || '',
                 needsDownload: true // 是否需要下载文件
