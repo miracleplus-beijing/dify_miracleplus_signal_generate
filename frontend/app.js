@@ -1248,19 +1248,45 @@ async function showScriptModal(arxivId) {
 
         // 显示播客稿内容
         scriptTitle.textContent = script.title;
-        scriptId.textContent = script.arxiv_id;
+        scriptId.textContent = `🆔 ${script.arxiv_id}`;
 
-        // 格式化来源类型
-        const typeMap = {
-            'excel': 'Excel文件',
-            'url': 'URL链接',
-            'article': '文本内容'
-        };
-        scriptType.textContent = typeMap[script.source_type] || '未知';
+        // 格式化来源链接（根据类型显示不同链接）
+        const sourceType = script.source_type;
+        if (sourceType === 'excel' && script.paper_url) {
+            // Excel模式：显示论文链接
+            scriptType.innerHTML = `
+                <a href="${script.paper_url}" target="_blank" rel="noopener noreferrer" class="paper-link">
+                    ${script.paper_url}
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                        <polyline points="15 3 21 3 21 9"></polyline>
+                        <line x1="10" y1="14" x2="21" y2="3"></line>
+                    </svg>
+                </a>
+            `;
+        } else if (sourceType === 'url' && script.source_url) {
+            // URL模式：显示用户输入的URL
+            scriptType.innerHTML = `
+                <a href="${script.source_url}" target="_blank" rel="noopener noreferrer" class="paper-link">
+                    ${script.source_url}
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                        <polyline points="15 3 21 3 21 9"></polyline>
+                        <line x1="10" y1="14" x2="21" y2="3"></line>
+                    </svg>
+                </a>
+            `;
+        } else if (sourceType === 'article') {
+            // 文本模式：不显示链接
+            scriptType.textContent = '文本输入';
+        } else {
+            // 无链接情况
+            scriptType.textContent = '无链接';
+        }
 
         // 格式化稿件内容，高亮[S1]等标记
         const formattedContent = formatScriptContent(script.script);
-        scriptContent.innerHTML = `<div class="script-text">${formattedContent}</div>`;
+        scriptContent.innerHTML = formattedContent; // 直接插入格式化内容，不再包裹div
 
         // 检查是否有对应的音频文件
         playAudioBtn.style.display = 'block';
@@ -1296,11 +1322,19 @@ function formatScriptContent(content) {
     // 替换换行为<br>
     let formatted = content.replace(/\n/g, '<br>');
 
-    // 高亮说话人标记 [S1], [S2] 等
-    formatted = formatted.replace(/\[S(\d+)\]/g, '<span class="speaker-tag">[S$1]</span>');
+    // 步骤1: 先用占位符替换S1和S2，避免被后续正则匹配
+    const S1_PLACEHOLDER = '___S1_PLACEHOLDER___';
+    const S2_PLACEHOLDER = '___S2_PLACEHOLDER___';
 
-    // 高亮其他标记
+    formatted = formatted.replace(/\[S1\]/g, S1_PLACEHOLDER);
+    formatted = formatted.replace(/\[S2\]/g, S2_PLACEHOLDER);
+
+    // 步骤2: 高亮其他标记（此时S1/S2已经是占位符，不会被匹配）
     formatted = formatted.replace(/\[[^\]]+\]/g, '<span class="tag">$&</span>');
+
+    // 步骤3: 将占位符替换为带颜色的HTML
+    formatted = formatted.replace(new RegExp(S1_PLACEHOLDER, 'g'), '<span class="speaker-tag speaker-s1">[S1]</span>');
+    formatted = formatted.replace(new RegExp(S2_PLACEHOLDER, 'g'), '<span class="speaker-tag speaker-s2">[S2]</span>');
 
     return formatted;
 }

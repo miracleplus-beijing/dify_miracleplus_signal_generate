@@ -299,35 +299,44 @@
             <div class="modal-header">
                 <h2>🎙️ 播客稿件详情</h2>
                 <div class="modal-actions">
-                    <button id="copyScriptBtn" class="btn-secondary" title="复制稿件">
-                        📋 复制
-                    </button>
                     <button id="closeScriptBtn" class="btn-close">&times;</button>
                 </div>
             </div>
             <div class="modal-body">
                 <div class="script-info">
-                    <div class="info-item">
-                        <label>📝 稿件标题:</label>
-                        <div id="scriptTitle" class="info-value">加载中...</div>
+                    <!-- 标题区块 -->
+                    <div class="script-title-block">
+                        <h3 id="scriptTitle" class="script-modal-title">加载中...</h3>
+                        <div id="scriptId" class="script-modal-id">🆔 加载中...</div>
                     </div>
+
+                    <!-- 来源链接 -->
                     <div class="info-item">
-                        <label>🆔 文件ID:</label>
-                        <div id="scriptId" class="info-value">加载中...</div>
-                    </div>
-                    <div class="info-item">
-                        <label>📂 来源类型:</label>
+                        <label>📂 来源链接:</label>
                         <div id="scriptType" class="info-value">加载中...</div>
                     </div>
                 </div>
 
-                <div class="script-content">
-                    <label>📄 稿件内容:</label>
+                <!-- 稿件内容区域 -->
+                <div class="script-section">
+                    <!-- 标题栏：左侧标题 + 右侧复制按钮 -->
+                    <div class="script-header">
+                        <h4 class="script-section-title">📄 稿件内容</h4>
+                        <button id="copyScriptBtn" class="btn-copy" title="复制稿件">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                            </svg>
+                            复制
+                        </button>
+                    </div>
+
+                    <!-- 内容滚动区域 -->
                     <div id="scriptContent" class="script-text">
                         <div class="loading-placeholder">正在加载稿件内容...</div>
                     </div>
                 </div>
-            </div>
+
             <div class="modal-footer">
                 <button id="playAudioBtn" class="btn-primary" style="display: none;">
                     🎵 播放音频
